@@ -155,8 +155,18 @@ async def _call_playwright_tool(tool_name: str, arguments: dict[str, Any]) -> An
         raise RuntimeError("Playwright subprocess not running")
 
     # Map playwright_ prefix to browser_ prefix used by playwright-mcp
-    # playwright-mcp tools use browser_ prefix (e.g., browser_navigate, browser_take_screenshot)
-    actual_tool_name = (
+    # playwright-mcp tools use browser_ prefix with different naming conventions
+    # Some tools need explicit mapping beyond simple prefix replacement
+    TOOL_NAME_MAP = {
+        "playwright_screenshot": "browser_take_screenshot",
+        "playwright_navigate": "browser_navigate",
+        "playwright_click": "browser_click",
+        "playwright_fill": "browser_fill_form",
+        "playwright_get_visible_text": "browser_snapshot",
+    }
+
+    actual_tool_name = TOOL_NAME_MAP.get(
+        tool_name,
         tool_name.replace("playwright_", "browser_", 1)
         if tool_name.startswith("playwright_")
         else tool_name
