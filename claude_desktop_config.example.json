@@ -1,0 +1,76 @@
+{
+  "mcpServers": {
+    "playwright-proxy-mcp-docker": {
+      "comment": "Docker deployment (recommended) - requires 'docker compose build' first",
+      "command": "docker",
+      "args": [
+        "run",
+        "-i",
+        "--rm",
+        "-v",
+        "/path/to/your/blob-storage:/mnt/blob-storage",
+        "-e",
+        "BLOB_STORAGE_ROOT=/mnt/blob-storage",
+        "-e",
+        "BLOB_MAX_SIZE_MB=2048",
+        "-e",
+        "BLOB_TTL_HOURS=24",
+        "-e",
+        "BLOB_SIZE_THRESHOLD_KB=50",
+        "-e",
+        "BLOB_CLEANUP_INTERVAL_MINUTES=60",
+        "-e",
+        "PLAYWRIGHT_BROWSER=chromium",
+        "-e",
+        "PLAYWRIGHT_HEADLESS=true",
+        "-e",
+        "PLAYWRIGHT_CAPS=vision,pdf",
+        "-e",
+        "PLAYWRIGHT_TIMEOUT_ACTION=5000",
+        "-e",
+        "PLAYWRIGHT_TIMEOUT_NAVIGATION=60000",
+        "playwright-proxy-mcp:latest",
+        "uv",
+        "run",
+        "playwright-proxy-mcp"
+      ]
+    },
+    "playwright-proxy-mcp-local": {
+      "comment": "Local deployment - requires Python 3.10+, Node.js 18+, and uv installed",
+      "command": "uv",
+      "args": [
+        "run",
+        "--directory",
+        "/path/to/playwright-proxy-mcp",
+        "playwright-proxy-mcp"
+      ],
+      "env": {
+        "BLOB_STORAGE_ROOT": "/path/to/your/blob-storage",
+        "BLOB_MAX_SIZE_MB": "2048",
+        "BLOB_TTL_HOURS": "24",
+        "BLOB_SIZE_THRESHOLD_KB": "50",
+        "BLOB_CLEANUP_INTERVAL_MINUTES": "60",
+        "PLAYWRIGHT_BROWSER": "chromium",
+        "PLAYWRIGHT_HEADLESS": "true",
+        "PLAYWRIGHT_CAPS": "vision,pdf",
+        "PLAYWRIGHT_TIMEOUT_ACTION": "5000",
+        "PLAYWRIGHT_TIMEOUT_NAVIGATION": "60000"
+      }
+    },
+    "playwright-proxy-mcp-minimal": {
+      "comment": "Minimal configuration using defaults - just specify blob storage location",
+      "command": "docker",
+      "args": [
+        "run",
+        "-i",
+        "--rm",
+        "-v",
+        "/path/to/your/blob-storage:/mnt/blob-storage",
+        "playwright-proxy-mcp:latest",
+        "uv",
+        "run",
+        "playwright-proxy-mcp"
+      ]
+    }
+  }
+}
