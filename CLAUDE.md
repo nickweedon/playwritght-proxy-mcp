@@ -1,10 +1,10 @@
-# Claude Context for Skeleton MCP Server
+# Claude Context for Playwright MCP Proxy
 
-This document provides context and guidelines for Claude when working with this MCP server project.
+This document provides context and guidelines for Claude when working with this MCP proxy server project.
 
 ## Project Overview
 
-This is a skeleton MCP (Model Context Protocol) server built with Python and FastMCP. It serves as a template for creating new MCP servers that can integrate with Claude Desktop and other MCP clients.
+This is a proxy server for Microsoft's playwright-mcp built with Python and FastMCP. It provides efficient handling of large binary data (screenshots, PDFs) through blob storage while maintaining full access to all playwright browser automation capabilities.
 
 ## Technology Stack
 
@@ -19,13 +19,20 @@ This is a skeleton MCP (Model Context Protocol) server built with Python and Fas
 ## Project Structure
 
 ```
-src/skeleton_mcp/
-├── server.py     # Main entry point, tool registration
-├── client.py     # API client for backend communication
-├── types.py      # TypedDict definitions for type safety
-├── api/          # Domain-specific API modules
-│   └── example.py
-└── utils/        # Utility functions
+src/playwright_proxy_mcp/
+├── server.py              # Main MCP proxy server
+├── types.py               # TypedDict definitions for blob/playwright types
+├── playwright/            # Playwright proxy components
+│   ├── __init__.py       # Package initialization
+│   ├── config.py         # Configuration loading (env vars)
+│   ├── process_manager.py # Subprocess lifecycle management
+│   ├── blob_manager.py   # Blob storage wrapper (mcp-mapped-resource-lib)
+│   ├── middleware.py     # Binary interception logic
+│   └── proxy_client.py   # Proxy client integration
+├── api/                   # MCP tools
+│   ├── __init__.py
+│   └── blob_tools.py     # Blob retrieval tools
+└── utils/                 # Utility functions
 ```
 
 ## Key Patterns
@@ -50,7 +57,7 @@ mcp.tool()(my_module.my_function)
 
 ### API Module Structure
 
-Each API module in `src/skeleton_mcp/api/` should:
+Each API module in `src/playwright_proxy_mcp/api/` should:
 
 1. Define async functions that perform specific operations
 2. Include comprehensive docstrings (these become tool descriptions)
@@ -98,7 +105,7 @@ class ResourceData(TypedDict):
 ### Running the Server
 
 ```bash
-uv run skeleton-mcp
+uv run playwright-proxy-mcp
 ```
 
 ### Running Tests
@@ -132,7 +139,7 @@ uv build
 
 When adding new functionality:
 
-1. Create a new module in `src/skeleton_mcp/api/`
+1. Create a new module in `src/playwright_proxy_mcp/api/`
 2. Define async functions with proper docstrings
 3. Add TypedDict definitions in `types.py` if needed
 4. Register tools in `server.py`
@@ -241,7 +248,7 @@ Configure in `.env`:
 
 1. Check that all dependencies are installed: `uv sync`
 2. Verify `.env` file exists and has required variables
-3. Check for syntax errors: `uv run python -m py_compile src/skeleton_mcp/server.py`
+3. Check for syntax errors: `uv run python -m py_compile src/playwright_proxy_mcp/server.py`
 
 ### Tests failing
 

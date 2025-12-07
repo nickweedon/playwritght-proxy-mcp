@@ -1,241 +1,295 @@
-# Customization Guide
+# Playwright MCP Proxy Customization Guide
 
-This guide explains how to customize the skeleton MCP server for your specific use case.
+This guide explains how to customize and extend the Playwright MCP Proxy.
 
-## Step 1: Rename the Project
+## Configuration
 
-1. **Rename the package directory**:
-   ```bash
-   mv src/skeleton_mcp src/your_project_name
-   ```
+### Environment Variables
 
-2. **Update pyproject.toml**:
-   - Change `name = "skeleton-mcp"` to your project name
-   - Update the description, authors, and keywords
-   - Update the script entry point:
-     ```toml
-     [project.scripts]
-     your-project = "your_project_name.server:main"
-     ```
-   - Update the wheel packages:
-     ```toml
-     [tool.hatch.build.targets.wheel]
-     packages = ["src/your_project_name"]
-     ```
+All configuration is done through environment variables in the `.env` file:
 
-3. **Update imports in all Python files**:
-   - `server.py`: Update imports from `skeleton_mcp` to `your_project_name`
-   - `api/__init__.py`: Update imports
-   - Test files: Update imports
+#### Playwright Configuration
 
-## Step 2: Configure Your API Client
+```bash
+# Browser selection
+PLAYWRIGHT_BROWSER=chromium  # chromium, firefox, webkit, msedge
 
-Edit `src/your_project_name/client.py`:
+# Run headless
+PLAYWRIGHT_HEADLESS=true
 
-1. **Update environment variable names**:
-   ```python
-   def get_client_config() -> dict[str, Any]:
-       return {
-           "api_key": os.getenv("YOUR_API_KEY"),
-           "api_base_url": os.getenv("YOUR_API_BASE_URL", "https://api.yourservice.com/v1"),
-           # ...
-       }
-   ```
+# Enable capabilities
+PLAYWRIGHT_CAPS=vision,pdf  # vision, pdf, testing, tracing
 
-2. **Customize authentication**:
-   ```python
-   # For Bearer token auth:
-   self.session.headers["Authorization"] = f"Bearer {self.api_key}"
+# Timeouts (milliseconds)
+PLAYWRIGHT_TIMEOUT_ACTION=5000
+PLAYWRIGHT_TIMEOUT_NAVIGATION=60000
 
-   # For API key header:
-   self.session.headers["X-API-Key"] = self.api_key
+# Output directory
+PLAYWRIGHT_OUTPUT_DIR=/app/playwright-output
 
-   # For Basic auth:
-   self.session.auth = (self.username, self.password)
-   ```
-
-3. **Add custom methods** for your API's patterns:
-   ```python
-   def paginated_get(self, endpoint: str, page: int = 1) -> dict:
-       """Get with pagination support."""
-       return self.get(endpoint, params={"page": page, "per_page": 100})
-   ```
-
-## Step 3: Define Your Data Types
-
-Edit `src/your_project_name/types.py`:
-
-```python
-class ProductData(TypedDict):
-    id: str
-    sku: str
-    name: str
-    price: float
-    quantity: int
-    category: str | None
-
-class OrderData(TypedDict):
-    id: str
-    customer_id: str
-    items: list[OrderItemData]
-    total: float
-    status: str
+# Session management
+PLAYWRIGHT_SAVE_SESSION=true
+PLAYWRIGHT_SAVE_TRACE=false
 ```
 
-## Step 4: Create Your API Modules
+#### Blob Storage Configuration
 
-Create new files in `src/your_project_name/api/`:
+```bash
+# Storage location
+BLOB_STORAGE_ROOT=/mnt/blob-storage
+
+# Size limits
+BLOB_MAX_SIZE_MB=500
+BLOB_SIZE_THRESHOLD_KB=50  # When to use blob vs inline
+
+# Cleanup
+BLOB_TTL_HOURS=24
+BLOB_CLEANUP_INTERVAL_MINUTES=60
+```
+
+See [.env.example](../.env.example) for all available options.
+
+## Adding Custom Tools
+
+While the proxy automatically forwards all playwright-mcp tools, you can add custom tools:
+
+### 1. Create a New API Module
+
+Create `src/playwright_proxy_mcp/api/custom_tools.py`:
 
 ```python
-# src/your_project_name/api/products.py
+"""Custom tools for playwright proxy"""
 
-from typing import Any
-from ..client import get_client
-from ..types import ProductData
-
-async def list_products(
-    category: str | None = None,
-    in_stock: bool | None = None,
-) -> list[ProductData]:
+async def analyze_screenshot(blob_id: str) -> dict:
     """
-    List products with optional filtering.
+    Analyze a screenshot blob.
 
     Args:
-        category: Filter by category
-        in_stock: Filter by stock availability
+        blob_id: The blob ID of the screenshot
 
     Returns:
-        List of products matching the criteria
+        Analysis results
     """
-    client = get_client()
-    params = {}
-    if category:
-        params["category"] = category
-    if in_stock is not None:
-        params["in_stock"] = in_stock
-
-    return client.get("products", params=params)
+    # Your custom logic here
+    return {"analysis": "..."}
 ```
 
-## Step 5: Register Your Tools
+### 2. Register in server.py
 
-Update `src/your_project_name/server.py`:
+In `src/playwright_proxy_mcp/server.py`:
 
 ```python
-from .api import products, orders, inventory
+from .api import custom_tools
 
-# Register all tools
-mcp.tool()(products.list_products)
-mcp.tool()(products.get_product)
-mcp.tool()(products.create_product)
-
-mcp.tool()(orders.list_orders)
-mcp.tool()(orders.create_order)
-mcp.tool()(orders.update_order_status)
-
-mcp.tool()(inventory.check_stock)
-mcp.tool()(inventory.adjust_stock)
+@mcp.tool()
+async def analyze_screenshot(blob_id: str) -> dict:
+    """Analyze a screenshot from blob storage"""
+    return await custom_tools.analyze_screenshot(blob_id)
 ```
 
-## Step 6: Add Resources (Optional)
+## Modifying Middleware Behavior
 
-Resources provide read-only data access:
+### Adjusting Binary Detection Threshold
+
+Edit `src/playwright_proxy_mcp/playwright/middleware.py`:
 
 ```python
-@mcp.resource("yourserver://categories")
-async def list_categories() -> str:
-    """Get all product categories."""
-    client = get_client()
-    categories = client.get("categories")
-    return "\n".join(c["name"] for c in categories)
-
-@mcp.resource("yourserver://product/{product_id}")
-async def get_product_resource(product_id: str) -> str:
-    """Get product details as a resource."""
-    client = get_client()
-    product = client.get(f"products/{product_id}")
-    return json.dumps(product, indent=2)
+class BinaryInterceptionMiddleware:
+    # Add more tools to always intercept
+    BINARY_TOOLS = {
+        "playwright_screenshot",
+        "playwright_pdf",
+        "playwright_save_as_pdf",
+        "your_custom_binary_tool",  # Add here
+    }
 ```
 
-## Step 7: Add Prompts (Optional)
+### Custom Response Transformation
 
-Prompts are templates for common operations:
+Override the `intercept_response` method:
 
 ```python
-@mcp.prompt()
-def inventory_report() -> str:
-    """Generate an inventory status report."""
-    return """
-    Please generate an inventory report that includes:
-    1. Total number of products
-    2. Products low on stock (< 10 units)
-    3. Out of stock products
-    4. Categories with the most items
+async def intercept_response(self, tool_name: str, response: Any) -> Any:
+    # Custom logic before standard interception
+    if tool_name == "special_tool":
+        # Do something special
+        pass
 
-    Use the list_products and check_stock tools to gather this information.
-    """
+    # Call parent implementation
+    return await super().intercept_response(tool_name, response)
 ```
 
-## Step 8: Write Tests
+## Extending Playwright Configuration
 
-Create test files in `tests/`:
+### Adding New Configuration Options
+
+1. Update `src/playwright_proxy_mcp/playwright/config.py`:
 
 ```python
-# tests/test_products_api.py
+class PlaywrightConfig(TypedDict, total=False):
+    # ... existing fields ...
+    custom_option: str  # Add your option
+```
+
+2. Update `load_playwright_config()`:
+
+```python
+def load_playwright_config() -> PlaywrightConfig:
+    config: PlaywrightConfig = {
+        # ... existing config ...
+        "custom_option": os.getenv("PLAYWRIGHT_CUSTOM_OPTION", "default"),
+    }
+    return config
+```
+
+3. Update `src/playwright_proxy_mcp/playwright/process_manager.py`:
+
+```python
+async def _build_command(self, config: PlaywrightConfig) -> list[str]:
+    # ... existing command building ...
+
+    # Add your custom option
+    if "custom_option" in config:
+        command.extend(["--custom-option", config["custom_option"]])
+```
+
+## Custom Blob Storage Logic
+
+### Implementing Custom Cleanup Logic
+
+Override cleanup behavior in `src/playwright_proxy_mcp/playwright/blob_manager.py`:
+
+```python
+async def cleanup_expired(self) -> int:
+    """Custom cleanup logic"""
+    # Your custom logic here
+
+    # Call parent cleanup
+    deleted = await super().cleanup_expired()
+
+    # Additional cleanup
+    # ...
+
+    return deleted
+```
+
+### Custom Blob Metadata
+
+Add custom metadata when storing blobs:
+
+```python
+async def store_base64_data(
+    self, base64_data: str, filename: str, tags: list[str] | None = None
+) -> dict[str, Any]:
+    # Add custom tags
+    custom_tags = ["custom-tag", "proxy-generated"]
+    all_tags = (tags or []) + custom_tags
+
+    # Call parent with enhanced tags
+    return await super().store_base64_data(base64_data, filename, all_tags)
+```
+
+## Docker Customization
+
+### Installing Additional Browser Engines
+
+Edit `Dockerfile`:
+
+```dockerfile
+# Install multiple browsers instead of just chromium
+RUN npx playwright@latest install chromium firefox webkit --with-deps
+```
+
+### Adding Custom System Dependencies
+
+```dockerfile
+# Add your dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    your-package \
+    another-package \
+    && rm -rf /var/lib/apt/lists/*
+```
+
+### Adjusting Resource Limits
+
+Edit `docker-compose.yml`:
+
+```yaml
+deploy:
+  resources:
+    limits:
+      memory: 8G      # Increase for heavy usage
+      cpus: '4.0'
+    reservations:
+      memory: 4G
+      cpus: '2.0'
+```
+
+## Testing Custom Features
+
+Create tests in `tests/test_custom.py`:
+
+```python
+"""Tests for custom features"""
 
 import pytest
-from your_project_name.api import products
+from playwright_proxy_mcp.api import custom_tools
 
-class TestListProducts:
-    @pytest.mark.asyncio
-    async def test_list_all_products(self):
-        result = await products.list_products()
-        assert isinstance(result, list)
 
-    @pytest.mark.asyncio
-    async def test_filter_by_category(self):
-        result = await products.list_products(category="electronics")
-        for product in result:
-            assert product["category"] == "electronics"
+class TestCustomTools:
+    """Tests for custom tools."""
+
+    async def test_custom_tool(self):
+        """Test custom tool functionality."""
+        result = await custom_tools.analyze_screenshot("blob://test.png")
+        assert "analysis" in result
 ```
 
-## Step 9: Update Documentation
+Run tests:
 
-1. **README.md**: Update with your project's specific information
-2. **CLAUDE.md**: Update patterns and guidelines for your project
-3. **.env.example**: Add your required environment variables
+```bash
+uv run pytest tests/test_custom.py -v
+```
 
-## Step 10: Configure Deployment
+## Troubleshooting
 
-Update Docker and deployment files:
+### Rebuilding After Changes
 
-1. **Dockerfile**: Add any system dependencies your API needs
-2. **docker-compose.yml**: Update service name and configuration
-3. **.devcontainer/devcontainer.json**: Update container name
+If you modify the package structure, rebuild:
+
+```bash
+uv sync
+```
+
+### Docker Rebuild
+
+After Dockerfile changes:
+
+```bash
+docker compose build --no-cache
+docker compose up -d
+```
+
+### Verifying Configuration
+
+Check loaded configuration:
+
+```bash
+uv run python -c "from playwright_proxy_mcp.playwright.config import load_playwright_config, load_blob_config; import json; print(json.dumps(load_playwright_config(), indent=2))"
+```
 
 ## Best Practices
 
-### Tool Design
+1. **Keep tools focused**: Each tool should do one thing well
+2. **Use type hints**: Helps with documentation and catches errors
+3. **Write tests**: Test your custom features thoroughly
+4. **Document changes**: Update docstrings and README
+5. **Handle errors gracefully**: Provide informative error messages
+6. **Use environment variables**: Keep configuration flexible
+7. **Monitor resource usage**: Browser automation can be memory-intensive
 
-- **One tool per operation**: Keep tools focused on a single action
-- **Clear naming**: Use verb_noun format (list_products, get_order)
-- **Comprehensive docstrings**: These are shown to MCP clients
-- **Sensible defaults**: Optional parameters should have reasonable defaults
+## Getting Help
 
-### Error Handling
-
-- Raise `ValueError` for validation errors and not found
-- Raise `RuntimeError` for API/server errors
-- Include enough context to help debug issues
-
-### Type Safety
-
-- Use TypedDict for all structured data
-- Use `| None` for optional fields
-- Keep types in sync with your actual API responses
-
-### Testing
-
-- Test happy paths and error cases
-- Use fixtures for common test data
-- Mock external API calls in unit tests
+- Check the [README](../README.md) for basic usage
+- Review [CLAUDE.md](../CLAUDE.md) for development guidelines
+- Open an issue on GitHub for bugs or feature requests

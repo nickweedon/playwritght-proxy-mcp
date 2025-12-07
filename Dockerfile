@@ -72,6 +72,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     git \
     curl \
     ca-certificates \
+    # For mcp-mapped-resource-lib MIME detection
+    libmagic1 \
+    # For Node.js (playwright-mcp)
+    gnupg \
+    && curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
+    && apt-get install -y nodejs \
     && rm -rf /var/lib/apt/lists/*
 
 # Install uv package manager
@@ -86,11 +92,21 @@ COPY --from=filtered-source /filtered /app
 # Install production dependencies
 RUN uv sync --frozen --no-dev 2>/dev/null || uv sync --no-dev
 
+# Install Playwright browsers (chromium by default)
+RUN npx playwright@latest install chromium --with-deps
+
+# Create directories for blob storage and playwright output
+RUN mkdir -p /mnt/blob-storage /app/playwright-output
+
 # Stage 4: Production stage
 FROM base AS production
 ENV PYTHONUNBUFFERED=1
 EXPOSE 8000
-CMD ["uv", "run", "skeleton-mcp"]
+
+# Mount points for persistence
+VOLUME ["/mnt/blob-storage", "/app/playwright-output"]
+
+CMD ["uv", "run", "playwright-proxy-mcp"]
 
 # Stage 5: Development stage with all files and additional tools
 FROM python:3.12-slim AS development

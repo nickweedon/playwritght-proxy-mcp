@@ -1,241 +1,255 @@
-# Skeleton MCP Server
+# Playwright MCP Proxy
 
-A template project for building [Model Context Protocol (MCP)](https://modelcontextprotocol.io/) servers. This skeleton provides a solid foundation with best practices, Docker support, and example implementations.
+A proxy server for Microsoft's [playwright-mcp](https://github.com/microsoft/playwright-mcp) that provides efficient handling of large binary data (screenshots, PDFs) through blob storage.
 
 ## Features
 
-- FastMCP framework for easy MCP server development
-- Docker and Docker Compose support for containerized deployment
-- VS Code Dev Container configuration for consistent development environments
-- Example CRUD API implementation to demonstrate patterns
-- Test suite with pytest
-- Claude Code integration with custom commands
+- **Playwright Browser Automation**: Full access to all playwright-mcp browser automation tools
+- **Efficient Binary Handling**: Large screenshots and PDFs are automatically stored as blobs to reduce token usage
+- **Blob Storage**: Built-in blob management using [mcp-mapped-resource-lib](https://github.com/nickweedon/mcp_mapped_resource_lib)
+- **Automatic Cleanup**: TTL-based automatic expiration of old blobs
+- **Docker Support**: Containerized deployment with multi-runtime support (Python + Node.js + Playwright)
+- **Configurable**: Extensive configuration options for both playwright and blob storage
 
 ## Quick Start
 
 ### Prerequisites
 
 - Python 3.10 or higher
+- Node.js 18+ (for playwright-mcp)
 - [uv](https://github.com/astral-sh/uv) package manager (recommended)
 - Docker (optional, for containerized deployment)
 
 ### Installation
 
-1. Clone this repository and rename it for your project:
+1. Clone this repository:
 
 ```bash
-git clone <this-repo> my-mcp-server
-cd my-mcp-server
+git clone <this-repo> playwright-proxy-mcp
+cd playwright-proxy-mcp
 ```
 
-2. Rename the package:
-   - Rename `src/skeleton_mcp` to `src/your_project_name`
-   - Update `pyproject.toml` with your project name and metadata
-   - Update imports in all Python files
-
-3. Install dependencies:
+2. Install dependencies:
 
 ```bash
 uv sync
 ```
 
-4. Create your environment file:
+3. Create your environment file:
 
 ```bash
 cp .env.example .env
-# Edit .env with your API credentials
+# Edit .env with your configuration (defaults are sensible)
 ```
 
-5. Run the server:
+4. Run the server:
 
 ```bash
-uv run skeleton-mcp
+uv run playwright-proxy-mcp
 ```
 
-## Project Structure
+The server will:
+- Start the playwright-mcp subprocess via npx
+- Initialize blob storage
+- Listen for MCP client connections on stdio
 
-```
-skeleton_mcp/
-├── src/skeleton_mcp/
-│   ├── __init__.py          # Package initialization
-│   ├── server.py            # Main MCP server entry point
-│   ├── client.py            # API client for backend communication
-│   ├── types.py             # TypedDict definitions
-│   ├── api/                  # API modules
-│   │   ├── __init__.py
-│   │   └── example.py       # Example CRUD operations
-│   └── utils/               # Utility modules
-│       └── __init__.py
-├── tests/                   # Test suite
-│   ├── conftest.py          # Pytest fixtures
-│   ├── test_example_api.py  # API tests
-│   └── test_server.py       # Server tests
-├── docs/                    # Documentation
-├── .claude/                 # Claude Code configuration
-│   ├── commands/            # Custom slash commands
-│   └── settings.local.json  # Permission settings
-├── .devcontainer/           # VS Code dev container
-├── Dockerfile               # Container image definition
-├── docker-compose.yml       # Production compose file
-├── docker-compose.devcontainer.yml  # Dev container compose
-├── pyproject.toml           # Project configuration
-├── CLAUDE.md               # Claude context documentation
-└── README.md               # This file
+## Docker Deployment
+
+Build and run with Docker Compose:
+
+```bash
+docker compose up -d
 ```
 
-## Development
+This will:
+- Build a container with Python, Node.js, and Playwright browsers
+- Create persistent volumes for blob storage and playwright output
+- Start the proxy server on port 8000
 
-### Running Tests
+## Configuration
+
+Configure the proxy via environment variables in `.env`:
+
+### Playwright Browser Settings
+
+- `PLAYWRIGHT_BROWSER`: Browser to use (chromium, firefox, webkit) - default: chromium
+- `PLAYWRIGHT_HEADLESS`: Run headless - default: true
+- `PLAYWRIGHT_CAPS`: Capabilities (vision,pdf,testing,tracing) - default: vision,pdf
+- `PLAYWRIGHT_TIMEOUT_ACTION`: Action timeout in ms - default: 5000
+- `PLAYWRIGHT_TIMEOUT_NAVIGATION`: Navigation timeout in ms - default: 60000
+
+### Blob Storage Settings
+
+- `BLOB_STORAGE_ROOT`: Storage directory - default: /mnt/blob-storage
+- `BLOB_MAX_SIZE_MB`: Max size per blob - default: 500
+- `BLOB_TTL_HOURS`: Time-to-live for blobs - default: 24
+- `BLOB_SIZE_THRESHOLD_KB`: Size threshold for blob storage - default: 50
+- `BLOB_CLEANUP_INTERVAL_MINUTES`: Cleanup frequency - default: 60
+
+See `.env.example` for all available options.
+
+## How It Works
+
+### Binary Data Interception
+
+The proxy automatically detects large binary data in playwright tool responses:
+
+1. When playwright tools return screenshots or PDFs
+2. If the data size exceeds the threshold (default: 50KB)
+3. The proxy stores the binary data as a blob
+4. The response is transformed to include a blob reference instead
+
+**Before (direct playwright-mcp):**
+```json
+{
+  "screenshot": "data:image/png;base64,iVBORw0KGgo...500KB of data..."
+}
+```
+
+**After (through proxy):**
+```json
+{
+  "screenshot": "blob://1733577600-a3f2c1d9e4b5.png",
+  "screenshot_size_kb": 500,
+  "screenshot_mime_type": "image/png",
+  "screenshot_blob_retrieval_tool": "get_blob",
+  "screenshot_expires_at": "2024-12-08T10:00:00Z"
+}
+```
+
+### Retrieving Blobs
+
+Use the `get_blob` tool to retrieve binary data when needed:
+
+```python
+result = await get_blob("blob://1733577600-a3f2c1d9e4b5.png")
+# Returns the original base64-encoded image data
+```
+
+## Available Tools
+
+### Playwright Tools (Proxied)
+
+All playwright-mcp tools are available:
+
+- `playwright_navigate`: Navigate to a URL
+- `playwright_click`: Click an element
+- `playwright_fill`: Fill a form field
+- `playwright_screenshot`: Take a screenshot (auto-stored as blob if large)
+- `playwright_get_visible_text`: Get page text
+- And many more...
+
+### Blob Management Tools
+
+- `get_blob(blob_id)`: Retrieve binary data by blob ID
+- `list_blobs(mime_type, tags, limit)`: List available blobs with filtering
+- `delete_blob(blob_id)`: Delete a blob from storage
+
+## Architecture
+
+```
+┌─────────────────────────────────┐
+│  MCP Client (Claude Desktop)   │
+└────────────┬────────────────────┘
+             │ stdio
+┌────────────▼────────────────────┐
+│  FastMCP Proxy (Python)         │
+│  - Binary Interception          │
+│  - Blob Storage Integration     │
+│  - Tool Forwarding              │
+└────────────┬────────────────────┘
+             │ stdio
+┌────────────▼────────────────────┐
+│  playwright-mcp (Node.js/npx)   │
+│  - Browser Automation           │
+│  - Screenshot/PDF Generation    │
+└─────────────────────────────────┘
+```
+
+## Testing
+
+Run the test suite:
 
 ```bash
 uv run pytest -v
 ```
 
-### Linting
+Lint the code:
 
 ```bash
 uv run ruff check src/ tests/
 uv run ruff format src/ tests/
 ```
 
-### Building
+## Project Structure
+
+```
+src/playwright_proxy_mcp/
+├── server.py              # Main MCP proxy server
+├── types.py               # TypedDict definitions
+├── playwright/            # Playwright proxy components
+│   ├── config.py         # Configuration loading
+│   ├── process_manager.py # Subprocess management
+│   ├── blob_manager.py   # Blob storage wrapper
+│   ├── middleware.py     # Binary interception
+│   └── proxy_client.py   # Proxy client integration
+└── api/
+    └── blob_tools.py     # Blob retrieval tools
+```
+
+## Benefits
+
+### Token Savings
+
+Large screenshots can consume 50,000+ tokens. With blob storage:
+- Screenshots stored as blobs use ~100 tokens for the reference
+- Retrieve full data only when needed
+- Automatic cleanup prevents storage bloat
+
+### Performance
+
+- Faster response times for tool calls
+- Reduced context window usage
+- Efficient deduplication of identical screenshots
+
+## Troubleshooting
+
+### npx not found
+
+Ensure Node.js is installed and npx is in your PATH:
 
 ```bash
-uv build
+node --version
+npx --version
 ```
 
-## Adding Your Own Tools
+### Playwright browser installation fails
 
-1. Create a new module in `src/skeleton_mcp/api/`:
-
-```python
-# src/skeleton_mcp/api/my_api.py
-
-async def my_tool(param1: str, param2: int = 10) -> dict:
-    """
-    Description of what this tool does.
-
-    Args:
-        param1: Description of param1
-        param2: Description of param2
-
-    Returns:
-        Description of return value
-    """
-    # Your implementation here
-    return {"result": "success"}
-```
-
-2. Register the tool in `server.py`:
-
-```python
-from .api import my_api
-
-mcp.tool()(my_api.my_tool)
-```
-
-3. Add types in `types.py` if needed:
-
-```python
-class MyDataType(TypedDict):
-    field1: str
-    field2: int
-```
-
-## Handling Large Files and Binary Data
-
-For MCP servers that need to handle large file uploads, downloads, or binary blob storage, use the [mcp-mapped-resource-lib](https://github.com/nickweedon/mcp_mapped_resource_lib) library:
+Install browsers manually:
 
 ```bash
-pip install mcp-mapped-resource-lib
+npx playwright@latest install chromium --with-deps
 ```
 
-This library provides:
-- Blob management with unique identifiers
-- Automatic TTL-based expiration and cleanup
-- Content deduplication
-- Security features (path traversal prevention, MIME validation)
-- Docker volume integration for shared storage
+### Blob storage permissions
 
-See [CLAUDE.md](CLAUDE.md#handling-large-files-and-binary-data) for detailed usage examples.
-
-## Docker Deployment
-
-### Build and run with Docker Compose:
+Ensure the blob storage directory is writable:
 
 ```bash
-docker compose up --build
+chmod -R 755 /mnt/blob-storage
 ```
-
-### For development with VS Code Dev Containers:
-
-1. Open the project in VS Code
-2. Install the "Dev Containers" extension
-3. Click "Reopen in Container" when prompted
-
-## Claude Desktop Integration
-
-Add to your Claude Desktop configuration (`claude_desktop_config.json`):
-
-```json
-{
-  "mcpServers": {
-    "skeleton-mcp": {
-      "command": "docker",
-      "args": [
-        "run",
-        "-i",
-        "--rm",
-        "--env-file",
-        "/path/to/your/.env",
-        "skeleton-mcp:latest"
-      ]
-    }
-  }
-}
-```
-
-Or for local development:
-
-```json
-{
-  "mcpServers": {
-    "skeleton-mcp": {
-      "command": "uv",
-      "args": ["--directory", "/path/to/skeleton_mcp", "run", "skeleton-mcp"]
-    }
-  }
-}
-```
-
-## Available Tools
-
-| Tool | Description |
-|------|-------------|
-| `health_check` | Check server health and configuration status |
-| `list_items` | List all items with filtering and pagination |
-| `get_item` | Get a specific item by ID |
-| `create_item` | Create a new item |
-| `update_item` | Update an existing item |
-| `delete_item` | Delete an item |
-
-## Environment Variables
-
-| Variable | Description | Default |
-|----------|-------------|---------|
-| `API_KEY` | Your API key for authentication | (required) |
-| `API_BASE_URL` | Base URL for the backend API | `https://api.example.com/v1` |
-| `API_TIMEOUT` | Request timeout in seconds | `30` |
-| `DEBUG` | Enable debug logging | `false` |
 
 ## License
 
-MIT License - See LICENSE file for details.
+MIT
 
 ## Contributing
 
-1. Fork the repository
-2. Create a feature branch
-3. Make your changes
-4. Run tests and linting
-5. Submit a pull request
+Contributions welcome! Please open an issue or pull request.
+
+## Resources
+
+- [Playwright MCP](https://github.com/microsoft/playwright-mcp)
+- [FastMCP Documentation](https://gofastmcp.com)
+- [MCP Mapped Resource Lib](https://github.com/nickweedon/mcp_mapped_resource_lib)
+- [Model Context Protocol](https://modelcontextprotocol.io)

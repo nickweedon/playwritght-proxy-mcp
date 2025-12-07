@@ -1,10 +1,31 @@
 services:
-  skeleton-mcp:
+  playwright-proxy:
     build:
       context: .
       target: production
+    container_name: playwright-proxy
     env_file:
       - .env
     ports:
       - "8000:8000"
+    volumes:
+      # Persistent blob storage
+      - blob-storage:/mnt/blob-storage
+      # Playwright session data, traces, videos
+      - playwright-output:/app/playwright-output
     restart: unless-stopped
+    # Resource limits for browser automation
+    deploy:
+      resources:
+        limits:
+          memory: 4G      # Browsers are memory-intensive
+          cpus: '2.0'
+        reservations:
+          memory: 2G
+          cpus: '1.0'
+
+volumes:
+  blob-storage:
+    driver: local
+  playwright-output:
+    driver: local
