@@ -142,6 +142,23 @@ class MyDataType(TypedDict):
     field2: int
 ```
 
+## Handling Large Files and Binary Data
+
+For MCP servers that need to handle large file uploads, downloads, or binary blob storage, use the [mcp-mapped-resource-lib](https://github.com/nickweedon/mcp_mapped_resource_lib) library:
+
+```bash
+pip install mcp-mapped-resource-lib
+```
+
+This library provides:
+- Blob management with unique identifiers
+- Automatic TTL-based expiration and cleanup
+- Content deduplication
+- Security features (path traversal prevention, MIME validation)
+- Docker volume integration for shared storage
+
+See [CLAUDE.md](CLAUDE.md#handling-large-files-and-binary-data) for detailed usage examples.
+
 ## Docker Deployment
 
 ### Build and run with Docker Compose:
