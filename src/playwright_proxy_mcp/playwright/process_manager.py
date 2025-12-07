@@ -136,7 +136,9 @@ class PlaywrightProcessManager:
         Returns:
             List of command and arguments
         """
-        command = ["npx", "@playwright/mcp@latest"]
+        # Use globally installed playwright-mcp instead of npx to ensure
+        # we use the version with browsers already installed
+        command = ["playwright-mcp"]
 
         # Browser
         if "browser" in config:
