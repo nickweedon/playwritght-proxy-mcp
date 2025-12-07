@@ -1,14 +1,17 @@
-# Skeleton MCP Server Dockerfile
+# Playwright Proxy MCP Server Dockerfile
 # Multi-stage build with manual file filtering for production
 
+# Build arguments with defaults
+ARG PYTHON_VERSION=3.12
+
 # Stage 1: Copy all source files (no .dockerignore filtering)
-FROM python:3.12-slim AS source
+FROM python:${PYTHON_VERSION}-slim AS source
 
 WORKDIR /source
 COPY . .
 
 # Stage 2: Filter files for production (remove dev-only files)
-FROM python:3.12-slim AS filtered-source
+FROM python:${PYTHON_VERSION}-slim AS filtered-source
 
 WORKDIR /filtered
 
@@ -65,7 +68,7 @@ RUN rm -rf \
     *.bak
 
 # Stage 3: Base production image
-FROM python:3.12-slim AS base
+FROM python:${PYTHON_VERSION}-slim AS base
 
 # Install system dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -84,10 +87,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
 
 # Set working directory
-WORKDIR /app
+WORKDIR /workspace
 
 # Copy filtered production files
-COPY --from=filtered-source /filtered /app
+COPY --from=filtered-source /filtered /workspace
 
 # Install production dependencies
 RUN uv sync --frozen --no-dev 2>/dev/null || uv sync --no-dev
@@ -96,7 +99,7 @@ RUN uv sync --frozen --no-dev 2>/dev/null || uv sync --no-dev
 RUN npx playwright@latest install chromium --with-deps
 
 # Create directories for blob storage and playwright output
-RUN mkdir -p /mnt/blob-storage /app/playwright-output
+RUN mkdir -p /mnt/blob-storage /workspace/playwright-output
 
 # Stage 4: Production stage
 FROM base AS production
@@ -104,39 +107,70 @@ ENV PYTHONUNBUFFERED=1
 EXPOSE 8000
 
 # Mount points for persistence
-VOLUME ["/mnt/blob-storage", "/app/playwright-output"]
+VOLUME ["/mnt/blob-storage", "/workspace/playwright-output"]
 
 CMD ["uv", "run", "playwright-proxy-mcp"]
 
 # Stage 5: Development stage with all files and additional tools
-FROM python:3.12-slim AS development
+FROM python:${PYTHON_VERSION}-slim AS development
 
 # Install system dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
     git \
     curl \
     ca-certificates \
+    sudo \
+    gnupg \
+    lsb-release \
     && rm -rf /var/lib/apt/lists/*
 
-# Install uv package manager
-COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
+# Install Docker CLI for Docker-outside-of-Docker (DooD) support
+RUN install -m 0755 -d /etc/apt/keyrings && \
+    curl -fsSL https://download.docker.com/linux/debian/gpg -o /etc/apt/keyrings/docker.asc && \
+    chmod a+r /etc/apt/keyrings/docker.asc && \
+    echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/debian $(. /etc/os-release && echo "$VERSION_CODENAME") stable" | tee /etc/apt/sources.list.d/docker.list > /dev/null && \
+    apt-get update && \
+    apt-get install -y docker-ce-cli docker-compose-plugin && \
+    rm -rf /var/lib/apt/lists/*
+
+# Create vscode user with sudo privileges
+ARG CREATE_VSCODE_USER=true
+RUN if [ "$CREATE_VSCODE_USER" = "true" ]; then \
+    groupadd --gid 1000 vscode && \
+    useradd --uid 1000 --gid 1000 -m -s /bin/bash vscode && \
+    echo "vscode ALL=(ALL) NOPASSWD:ALL" >> /etc/sudoers.d/vscode && \
+    chmod 0440 /etc/sudoers.d/vscode && \
+    groupadd docker || true && \
+    usermod -aG docker vscode; \
+    fi
 
 # Set working directory
-WORKDIR /app
-
-# Copy ALL files from source (including tests, CLAUDE.md, etc.)
-COPY --from=source /source /app
+WORKDIR /workspace
 
 # Install Node.js for Claude Code CLI
 RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
     && apt-get install -y nodejs \
     && rm -rf /var/lib/apt/lists/*
 
-# Install Claude Code CLI
+# Install Claude Code CLI globally
 RUN npm install -g @anthropic-ai/claude-code
 
-# Install dev dependencies (including optional dev dependencies)
-RUN uv sync --frozen --all-extras 2>/dev/null || uv sync --all-extras
+# Install uv package manager for root
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
+
+# Install uv for vscode user if created
+RUN if [ "$CREATE_VSCODE_USER" = "true" ]; then \
+    su - vscode -c "curl -LsSf https://astral.sh/uv/install.sh | sh"; \
+    fi
+
+# Copy ALL files from source (including tests, CLAUDE.md, etc.)
+COPY --from=source /source /workspace
+
+# Set ownership of workspace to vscode user
+RUN chown -R vscode:vscode /workspace
+
+# Don't run uv sync here - let postCreateCommand handle it as vscode user
+# This avoids permission issues with the .venv directory
 
 ENV PYTHONUNBUFFERED=1
-CMD ["bash"]
+CMD ["/usr/bin/sleep", "infinity"]

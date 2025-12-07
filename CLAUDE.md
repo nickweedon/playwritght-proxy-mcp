@@ -247,24 +247,24 @@ Configure in `.env`:
 ### Checking Claude Desktop Logs
 
 When working in the devcontainer, Claude Desktop MCP server logs are mounted at:
-- **Path**: `/app/logs/claude-desktop-mcp.log`
-- **Source**: `C:\Users\nickw\AppData\Roaming\Claude\logs\mcp-server-playwright-proxy-mcp-docker.log`
+- **Path**: `/workspace/logs/`
+- **Source**: `C:\Users\nickw\AppData\Roaming\Claude\logs\`
 
-These logs contain output from the MCP server as it's being used by the Claude Desktop application. When asked to check logs or diagnose issues, refer to this file.
+These logs contain output from the MCP server as it's being used by the Claude Desktop application. When asked to check logs or diagnose issues, refer to the ```mcp-server-playwright-proxy-mcp-docker.log``` file.
 
 **Common log commands**:
 ```bash
 # View last 50 lines
-tail -n 50 /app/logs/claude-desktop-mcp.log
+tail -n 50 /workspace/logs/claude-desktop-mcp.log
 
 # Follow logs in real-time
-tail -f /app/logs/claude-desktop-mcp.log
+tail -f /workspace/logs/claude-desktop-mcp.log
 
 # Search for errors
-grep -i error /app/logs/claude-desktop-mcp.log
+grep -i error /workspace/logs/claude-desktop-mcp.log
 
 # View full log
-cat /app/logs/claude-desktop-mcp.log
+cat /workspace/logs/claude-desktop-mcp.log
 ```
 
 ### Server won't start
@@ -272,7 +272,7 @@ cat /app/logs/claude-desktop-mcp.log
 1. Check that all dependencies are installed: `uv sync`
 2. Verify `.env` file exists and has required variables
 3. Check for syntax errors: `uv run python -m py_compile src/playwright_proxy_mcp/server.py`
-4. Check Claude Desktop logs: `tail -f /app/logs/claude-desktop-mcp.log`
+4. Check Claude Desktop logs: `tail -f /workspace/logs/claude-desktop-mcp.log`
 
 ### Tests failing
 
@@ -283,4 +283,4 @@ cat /app/logs/claude-desktop-mcp.log
 
 1. Rebuild image: `docker compose build --no-cache`
 2. Check logs: `docker compose logs -f`
-3. Check Claude Desktop MCP logs: `tail -f /app/logs/claude-desktop-mcp.log`
+3. Check Claude Desktop MCP logs: `tail -f /workspace/logs/claude-desktop-mcp.log`

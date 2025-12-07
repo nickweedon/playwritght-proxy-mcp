@@ -2,7 +2,6 @@
 Tests for configuration loading
 """
 
-import os
 
 from playwright_proxy_mcp.playwright.config import load_blob_config, load_playwright_config
 

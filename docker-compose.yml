@@ -1,9 +1,10 @@
 services:
-  playwright-proxy:
+  playwright-proxy-mcp:
     build:
       context: .
       target: production
-    container_name: playwright-proxy
+    image: playwright-proxy-mcp:latest
+    container_name: playwright-proxy-mcp
     env_file:
       - .env
     ports:

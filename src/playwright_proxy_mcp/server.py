@@ -11,9 +11,9 @@ This server:
 4. Provides tools for blob retrieval and management
 """
 
-import asyncio
 import json
 import logging
+from contextlib import asynccontextmanager
 from typing import Any
 
 from fastmcp import FastMCP
@@ -44,7 +44,8 @@ middleware = None
 proxy_client = None
 
 
-async def lifespan_context():
+@asynccontextmanager
+async def lifespan_context(server):
     """Lifespan context manager for startup and shutdown"""
     global playwright_config, blob_config, blob_manager, process_manager
     global middleware, proxy_client
@@ -145,7 +146,7 @@ async def _call_playwright_tool(tool_name: str, arguments: dict[str, Any]) -> An
     Call a playwright-mcp tool through the subprocess.
 
     Args:
-        tool_name: Name of the tool
+        tool_name: Name of the tool (with or without playwright_ prefix)
         arguments: Tool arguments
 
     Returns:
@@ -158,13 +159,16 @@ async def _call_playwright_tool(tool_name: str, arguments: dict[str, Any]) -> An
     if not process or not process.stdin or not process.stdout:
         raise RuntimeError("Playwright subprocess not properly initialized")
 
+    # Strip playwright_ prefix if present to get actual tool name
+    actual_tool_name = tool_name.replace("playwright_", "", 1) if tool_name.startswith("playwright_") else tool_name
+
     # Create JSON-RPC request
     request_id = id(arguments)  # Simple request ID
     request = {
         "jsonrpc": "2.0",
         "id": request_id,
         "method": "tools/call",
-        "params": {"name": tool_name, "arguments": arguments},
+        "params": {"name": actual_tool_name, "arguments": arguments},
     }
 
     # Send request to subprocess

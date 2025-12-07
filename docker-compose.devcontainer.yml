@@ -3,13 +3,18 @@ services:
     build:
       context: .
       target: development
+      args:
+        CREATE_VSCODE_USER: true
+    user: vscode
     env_file:
       - .env
     volumes:
-      - .:/app:cached
+      - .:/workspace:cached
       - /var/run/docker.sock:/var/run/docker.sock
-      # Mount Claude Desktop MCP server logs (read-only)
-      - C:\Users\nickw\AppData\Roaming\Claude\logs\mcp-server-playwright-proxy-mcp-docker.log:/app/logs/claude-desktop-mcp.log:ro
+      # Mount Claude Desktop MCP server log file (read-only)
+      - /mnt/c/Users/nickw/AppData/Roaming/Claude/logs:/workspace/logs:ro
+      # Mount Claude Code config for authentication
+      - /mnt/c/Users/nickw/.config/claude-code:/home/vscode/.config/claude-code:ro
     ports:
       - "8000:8000"
     stdin_open: true

@@ -1,8 +1,8 @@
 {
-    "name": "Skeleton MCP Development",
+    "name": "Playwright Proxy MCP Development",
     "dockerComposeFile": "../docker-compose.devcontainer.yml",
     "service": "devcontainer",
-    "workspaceFolder": "/app",
+    "workspaceFolder": "/workspace",
     "customizations": {
         "vscode": {
             "extensions": [
@@ -10,10 +10,11 @@
                 "ms-python.vscode-pylance",
                 "ms-python.debugpy",
                 "charliermarsh.ruff",
-                "anthropics.claude-code"
+                "anthropics.claude-code",
+                "anthropics.claude"
             ],
             "settings": {
-                "python.defaultInterpreterPath": "/app/.venv/bin/python",
+                "python.defaultInterpreterPath": "/workspace/.venv/bin/python",
                 "python.analysis.typeCheckingMode": "basic",
                 "editor.formatOnSave": true,
                 "[python]": {
@@ -23,5 +24,9 @@
         }
     },
     "postCreateCommand": "uv sync",
-    "remoteUser": "root"
+
+    // Fix docker group GID to match host's docker socket
+    "postStartCommand": "sudo chgrp docker /var/run/docker.sock 2>/dev/null || true",
+
+    "remoteUser": "vscode"
 }

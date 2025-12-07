@@ -9,7 +9,6 @@ import asyncio
 import logging
 import shutil
 from asyncio.subprocess import Process
-from typing import Any
 
 from .config import PlaywrightConfig
 

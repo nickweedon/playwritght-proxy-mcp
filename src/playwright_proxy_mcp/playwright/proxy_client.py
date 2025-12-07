@@ -5,11 +5,8 @@ Manages the connection between FastMCP proxy and the playwright-mcp subprocess,
 integrating middleware for response transformation.
 """
 
-import asyncio
 import logging
 from typing import Any
-
-from fastmcp import Context
 
 from .middleware import BinaryInterceptionMiddleware
 from .process_manager import PlaywrightProcessManager

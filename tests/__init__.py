@@ -1,1 +1,1 @@
-"""Tests for the Skeleton MCP Server."""
+"""Tests for the Playwright Proxy MCP Server."""
