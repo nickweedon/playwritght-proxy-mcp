@@ -60,9 +60,10 @@ class TestPlaywrightProcessManager:
                 assert result == mock_process
                 assert process_manager.process == mock_process
 
-                # Verify playwright-mcp was called with correct arguments
+                # Verify node was called with playwright-mcp
                 call_args = mock_create.call_args[0]
-                assert call_args[0] == "playwright-mcp"
+                assert call_args[0] == "node"
+                assert "@playwright/mcp" in call_args[1]
 
     @pytest.mark.asyncio
     async def test_start_process_fails(self, process_manager, mock_config):
@@ -162,7 +163,8 @@ class TestPlaywrightProcessManager:
 
         command = await process_manager._build_command(config)
 
-        assert command[0] == "playwright-mcp"
+        assert command[0] == "node"
+        assert "@playwright/mcp" in command[1]
         assert "--browser" in command
         assert "chromium" in command
         assert "--headless" in command
