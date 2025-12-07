@@ -11,7 +11,6 @@ This server:
 4. Provides tools for blob retrieval and management
 """
 
-import json
 import logging
 from contextlib import asynccontextmanager
 from typing import Any
@@ -155,43 +154,15 @@ async def _call_playwright_tool(tool_name: str, arguments: dict[str, Any]) -> An
     if not proxy_client or not proxy_client.is_healthy():
         raise RuntimeError("Playwright subprocess not running")
 
-    process = proxy_client.get_process()
-    if not process or not process.stdin or not process.stdout:
-        raise RuntimeError("Playwright subprocess not properly initialized")
-
     # Strip playwright_ prefix if present to get actual tool name
-    actual_tool_name = tool_name.replace("playwright_", "", 1) if tool_name.startswith("playwright_") else tool_name
+    actual_tool_name = (
+        tool_name.replace("playwright_", "", 1)
+        if tool_name.startswith("playwright_")
+        else tool_name
+    )
 
-    # Create JSON-RPC request
-    request_id = id(arguments)  # Simple request ID
-    request = {
-        "jsonrpc": "2.0",
-        "id": request_id,
-        "method": "tools/call",
-        "params": {"name": actual_tool_name, "arguments": arguments},
-    }
-
-    # Send request to subprocess
-    request_json = json.dumps(request) + "\n"
-    process.stdin.write(request_json.encode("utf-8"))
-    await process.stdin.drain()
-
-    # Read response from subprocess
-    response_line = await process.stdout.readline()
-    response = json.loads(response_line.decode("utf-8"))
-
-    # Check for errors
-    if "error" in response:
-        error = response["error"]
-        raise RuntimeError(f"Playwright tool error: {error.get('message', error)}")
-
-    # Get result
-    result = response.get("result", {})
-
-    # Transform through middleware
-    transformed_result = await proxy_client.transform_response(tool_name, result)
-
-    return transformed_result
+    # Call tool through proxy client
+    return await proxy_client.call_tool(actual_tool_name, arguments)
 
 
 # Register common playwright tools
