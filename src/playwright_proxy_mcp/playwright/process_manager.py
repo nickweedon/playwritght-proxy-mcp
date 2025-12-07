@@ -146,6 +146,10 @@ class PlaywrightProcessManager:
         if "headless" in config and config["headless"]:
             command.append("--headless")
 
+        # No sandbox (required for running as root in Docker)
+        if "no_sandbox" in config and config["no_sandbox"]:
+            command.append("--no-sandbox")
+
         # Device emulation
         if "device" in config and config["device"]:
             command.extend(["--device", config["device"]])

@@ -29,6 +29,7 @@ class PlaywrightConfig(TypedDict, total=False):
     # Browser settings
     browser: str
     headless: bool
+    no_sandbox: bool
     device: str | None
     viewport_size: str | None
 
@@ -96,6 +97,7 @@ def load_playwright_config() -> PlaywrightConfig:
     config: PlaywrightConfig = {
         "browser": os.getenv("PLAYWRIGHT_BROWSER", "chromium"),
         "headless": _get_bool_env("PLAYWRIGHT_HEADLESS", True),
+        "no_sandbox": _get_bool_env("PLAYWRIGHT_NO_SANDBOX", True),
         "isolated": _get_bool_env("PLAYWRIGHT_ISOLATED", True),
         "caps": os.getenv("PLAYWRIGHT_CAPS", "vision,pdf"),
         "save_session": _get_bool_env("PLAYWRIGHT_SAVE_SESSION", True),
