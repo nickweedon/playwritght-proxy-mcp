@@ -244,11 +244,35 @@ Configure in `.env`:
 
 ## Troubleshooting
 
+### Checking Claude Desktop Logs
+
+When working in the devcontainer, Claude Desktop MCP server logs are mounted at:
+- **Path**: `/app/logs/claude-desktop-mcp.log`
+- **Source**: `C:\Users\nickw\AppData\Roaming\Claude\logs\mcp-server-playwright-proxy-mcp-docker.log`
+
+These logs contain output from the MCP server as it's being used by the Claude Desktop application. When asked to check logs or diagnose issues, refer to this file.
+
+**Common log commands**:
+```bash
+# View last 50 lines
+tail -n 50 /app/logs/claude-desktop-mcp.log
+
+# Follow logs in real-time
+tail -f /app/logs/claude-desktop-mcp.log
+
+# Search for errors
+grep -i error /app/logs/claude-desktop-mcp.log
+
+# View full log
+cat /app/logs/claude-desktop-mcp.log
+```
+
 ### Server won't start
 
 1. Check that all dependencies are installed: `uv sync`
 2. Verify `.env` file exists and has required variables
 3. Check for syntax errors: `uv run python -m py_compile src/playwright_proxy_mcp/server.py`
+4. Check Claude Desktop logs: `tail -f /app/logs/claude-desktop-mcp.log`
 
 ### Tests failing
 
@@ -259,3 +283,4 @@ Configure in `.env`:
 
 1. Rebuild image: `docker compose build --no-cache`
 2. Check logs: `docker compose logs -f`
+3. Check Claude Desktop MCP logs: `tail -f /app/logs/claude-desktop-mcp.log`
