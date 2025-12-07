@@ -166,6 +166,18 @@ RUN if [ "$CREATE_VSCODE_USER" = "true" ]; then \
 # Copy ALL files from source (including tests, CLAUDE.md, etc.)
 COPY --from=source /source /workspace
 
+# Install system dependencies for Playwright and libmagic
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libmagic1 \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Playwright browsers (chromium by default) for the subprocess
+# This needs to be done at system level so npx playwright can find them
+RUN npx playwright@latest install chromium --with-deps
+
+# Create directories for blob storage and playwright output
+RUN mkdir -p /mnt/blob-storage /workspace/playwright-output
+
 # Set ownership of workspace to vscode user
 RUN chown -R vscode:vscode /workspace
 
