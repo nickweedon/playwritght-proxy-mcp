@@ -29,6 +29,8 @@
         "PLAYWRIGHT_TIMEOUT_ACTION=5000",
         "-e",
         "PLAYWRIGHT_TIMEOUT_NAVIGATION=60000",
+        "-e",
+        "PLAYWRIGHT_VIEWPORT_SIZE=1920x1080",
         "playwright-proxy-mcp:latest",
         "uv",
         "run",
@@ -54,7 +56,8 @@
         "PLAYWRIGHT_HEADLESS": "true",
         "PLAYWRIGHT_CAPS": "vision,pdf",
         "PLAYWRIGHT_TIMEOUT_ACTION": "5000",
-        "PLAYWRIGHT_TIMEOUT_NAVIGATION": "60000"
+        "PLAYWRIGHT_TIMEOUT_NAVIGATION": "60000",
+        "PLAYWRIGHT_VIEWPORT_SIZE": "1920x1080"
       }
     },
     "playwright-proxy-mcp-minimal": {
