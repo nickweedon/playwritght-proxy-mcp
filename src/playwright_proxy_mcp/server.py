@@ -189,11 +189,11 @@ async def playwright_navigate(url: str) -> dict[str, Any]:
 
 
 @mcp.tool()
-async def playwright_screenshot(name: str | None = None, full_page: bool = False) -> dict[str, Any]:
+async def playwright_screenshot(name: str | None = None, full_page: bool = False) -> str:
     """
     Take a screenshot of the current page.
 
-    Large screenshots are automatically stored as blobs and returned as blob:// URIs.
+    Screenshots are automatically stored as blobs and returned as blob:// URIs.
     Use a separate MCP Resource Server to retrieve blob data.
 
     Args:
@@ -201,7 +201,7 @@ async def playwright_screenshot(name: str | None = None, full_page: bool = False
         full_page: Whether to capture the full scrollable page
 
     Returns:
-        Dictionary containing screenshot data or blob:// URI reference
+        Blob URI reference (blob://timestamp-hash.png)
     """
     args = {}
     if name is not None:
@@ -211,7 +211,7 @@ async def playwright_screenshot(name: str | None = None, full_page: bool = False
 
     result = await _call_playwright_tool("playwright_screenshot", args)
 
-    # Return the result directly - middleware has already transformed to blob:// if needed
+    # Return the blob URI - middleware has already transformed to blob://
     return result
 
 
