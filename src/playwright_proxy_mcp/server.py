@@ -189,7 +189,7 @@ async def playwright_navigate(url: str) -> dict[str, Any]:
 
 
 @mcp.tool()
-async def playwright_screenshot(name: str | None = None, full_page: bool = False) -> str:
+async def playwright_screenshot(name: str | None = None, full_page: bool = True) -> str:
     """
     Take a screenshot of the current page.
 
