@@ -190,6 +190,10 @@ RUN mkdir -p /mnt/blob-storage /workspace/playwright-output
 # Set ownership of workspace to vscode user
 RUN chown -R vscode:vscode /workspace
 
+# Install Playwright browsers for vscode user as well
+# This is needed because the devcontainer runs as vscode user, not root
+RUN su - vscode -c "cd /usr/lib/node_modules/@playwright/mcp && npx playwright install chromium --with-deps"
+
 # Don't run uv sync here - let postCreateCommand handle it as vscode user
 # This avoids permission issues with the .venv directory
 
