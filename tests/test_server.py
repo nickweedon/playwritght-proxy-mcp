@@ -62,8 +62,8 @@ async def test_call_playwright_tool_success():
     mock_client.call_tool = AsyncMock(return_value={"status": "success", "data": "transformed"})
 
     with patch("playwright_proxy_mcp.server.proxy_client", mock_client):
-        # Use playwright_ prefix to test the mapping
-        result = await _call_playwright_tool("playwright_navigate", {"url": "https://example.com"})
+        # Use browser_ prefix directly (no mapping needed)
+        result = await _call_playwright_tool("browser_navigate", {"url": "https://example.com"})
 
         assert result == {"status": "success", "data": "transformed"}
 
@@ -75,15 +75,15 @@ async def test_call_playwright_tool_success():
 
 @pytest.mark.asyncio
 async def test_call_playwright_tool_strips_prefix():
-    """Test that playwright_ prefix is mapped to browser_ prefix."""
+    """Test that tool names are passed through directly without modification."""
     mock_client = Mock()
     mock_client.is_healthy.return_value = True
     mock_client.call_tool = AsyncMock(return_value={})
 
     with patch("playwright_proxy_mcp.server.proxy_client", mock_client):
-        await _call_playwright_tool("playwright_navigate", {"url": "https://example.com"})
+        await _call_playwright_tool("browser_navigate", {"url": "https://example.com"})
 
-        # Tool name should be mapped to browser_navigate
+        # Tool name should be passed through as-is
         mock_client.call_tool.assert_called_once_with(
             "browser_navigate", {"url": "https://example.com"}
         )
@@ -105,7 +105,7 @@ async def test_call_playwright_tool_error_response():
 
 @pytest.mark.asyncio
 async def test_playwright_screenshot_returns_blob_uri():
-    """Test that playwright_screenshot returns blob:// URI directly."""
+    """Test that browser_take_screenshot returns blob:// URI directly."""
     mock_client = Mock()
     mock_client.is_healthy.return_value = True
 
@@ -121,7 +121,7 @@ async def test_playwright_screenshot_returns_blob_uri():
     with patch("playwright_proxy_mcp.server.proxy_client", mock_client):
         # Call _call_playwright_tool directly since the tool is wrapped by FastMCP
         result = await _call_playwright_tool(
-            "playwright_screenshot", {"name": "test", "fullPage": True}
+            "browser_take_screenshot", {"filename": "test", "fullPage": True}
         )
 
         # Should return the dict directly, not transform to Image
@@ -132,5 +132,5 @@ async def test_playwright_screenshot_returns_blob_uri():
 
         # Verify correct tool call
         mock_client.call_tool.assert_called_once_with(
-            "browser_take_screenshot", {"name": "test", "fullPage": True}
+            "browser_take_screenshot", {"filename": "test", "fullPage": True}
         )

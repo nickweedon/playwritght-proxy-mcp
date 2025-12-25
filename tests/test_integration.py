@@ -164,7 +164,7 @@ class TestIntegrationWorkflows:
                 assert proxy_client.is_healthy(), "Proxy client should be healthy after starting"
 
                 # Navigate to Amazon using the MCP server tool's underlying function
-                navigate_result = await server_module.playwright_navigate.fn(
+                navigate_result = await server_module.browser_navigate.fn(
                     "https://www.amazon.com"
                 )
 
@@ -172,8 +172,8 @@ class TestIntegrationWorkflows:
                 assert navigate_result is not None, "Navigation result should not be None"
 
                 # Take a screenshot using the MCP server tool's underlying function (not proxy client directly!)
-                blob_uri = await server_module.playwright_screenshot.fn(
-                    name="amazon_homepage", full_page=False
+                blob_uri = await server_module.browser_take_screenshot.fn(
+                    filename="amazon_homepage", fullPage=False
                 )
 
                 # CRITICAL VERIFICATION: Result should be ONLY a blob URI string, not blob data
@@ -279,7 +279,7 @@ class TestIntegrationWorkflows:
                 assert proxy_client.is_healthy(), "Proxy client should be healthy after starting"
 
                 # 1. Navigate to Amazon homepage
-                navigate_result_1 = await server_module.playwright_navigate.fn(
+                navigate_result_1 = await server_module.browser_navigate.fn(
                     "https://www.amazon.com"
                 )
 
@@ -290,7 +290,7 @@ class TestIntegrationWorkflows:
                 # This is the second call that we're focusing on
                 import json
 
-                navigate_result_2 = await server_module.playwright_navigate.fn(
+                navigate_result_2 = await server_module.browser_navigate.fn(
                     "https://www.amazon.com/s?k=trousers"
                 )
 
@@ -410,11 +410,11 @@ class TestIntegrationWorkflows:
                 await blob_manager.start_cleanup_task()
 
                 # Navigate to Amazon
-                await server_module.playwright_navigate.fn("https://www.amazon.com")
+                await server_module.browser_navigate.fn("https://www.amazon.com")
 
                 # Take viewport-only screenshot (full_page=False)
-                blob_uri = await server_module.playwright_screenshot.fn(
-                    name="amazon_viewport_test", full_page=False
+                blob_uri = await server_module.browser_take_screenshot.fn(
+                    filename="amazon_viewport_test", fullPage=False
                 )
 
                 # Verify we got a blob URI
