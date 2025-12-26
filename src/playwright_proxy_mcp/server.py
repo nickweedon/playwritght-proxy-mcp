@@ -189,15 +189,42 @@ async def browser_navigate(
 
             The ARIA snapshot is converted from YAML to JSON, then the query is applied.
 
+            ARIA SNAPSHOT STRUCTURE:
+            ARIA snapshots are hierarchical JSON arrays where elements can contain children:
+            [
+              {
+                "role": "document",
+                "children": [
+                  {
+                    "role": "main",
+                    "children": [
+                      {"role": "heading", "name": {"value": "Title"}, "ref": "e1"},
+                      {"role": "paragraph", "name": {"value": "Text"}, "ref": "e2"}
+                    ]
+                  }
+                ]
+              }
+            ]
+
+            CRITICAL: The root is always an ARRAY, and elements nest via "children" arrays.
+
+            QUERY PATTERNS FOR NESTED STRUCTURES:
+            - "[?role == 'heading']" - Find headings ONLY at root level (rarely useful)
+            - "[].children[?role == 'heading']" - Find headings in first-level children
+            - "[].children[].children[?role == 'heading']" - Find headings nested 2 levels deep
+            - "[].children[].children[?role == 'heading'] | []" - Same but flatten results
+            - To search ALL depths, chain multiple levels or use projection + filtering
+
             CRITICAL SYNTAX NOTE: Field names in ARIA JSON use special characters.
             You MUST use DOUBLE QUOTES for field identifiers, NOT backticks:
             - CORRECT: "role", "name", "name.value"
             - WRONG: `role` (backticks create literal strings, not field references)
 
             Standard JMESPath examples:
-            - "[?role == 'button']" - Find all buttons
+            - "[?role == 'button']" - Find buttons at root
+            - "[].children[?role == 'button']" - Find buttons in first child level
             - "[?contains(nvl(name.value, ''), 'Submit')]" - Find elements with 'Submit' in name
-            - "[?role == 'link'].name.value" - Extract all link names
+            - "[].children[].children[?role == 'link'].name.value" - Extract link names from 2nd level
             - "[?role == 'textbox' && disabled == `true`]" - Find disabled textboxes
 
             Custom functions available:
@@ -660,15 +687,42 @@ async def browser_snapshot(
 
             The ARIA snapshot is converted from YAML to JSON, then the query is applied.
 
+            ARIA SNAPSHOT STRUCTURE:
+            ARIA snapshots are hierarchical JSON arrays where elements can contain children:
+            [
+              {
+                "role": "document",
+                "children": [
+                  {
+                    "role": "main",
+                    "children": [
+                      {"role": "heading", "name": {"value": "Title"}, "ref": "e1"},
+                      {"role": "paragraph", "name": {"value": "Text"}, "ref": "e2"}
+                    ]
+                  }
+                ]
+              }
+            ]
+
+            CRITICAL: The root is always an ARRAY, and elements nest via "children" arrays.
+
+            QUERY PATTERNS FOR NESTED STRUCTURES:
+            - "[?role == 'heading']" - Find headings ONLY at root level (rarely useful)
+            - "[].children[?role == 'heading']" - Find headings in first-level children
+            - "[].children[].children[?role == 'heading']" - Find headings nested 2 levels deep
+            - "[].children[].children[?role == 'heading'] | []" - Same but flatten results
+            - To search ALL depths, chain multiple levels or use projection + filtering
+
             CRITICAL SYNTAX NOTE: Field names in ARIA JSON use special characters.
             You MUST use DOUBLE QUOTES for field identifiers, NOT backticks:
             - CORRECT: "role", "name", "name.value"
             - WRONG: `role` (backticks create literal strings, not field references)
 
             Standard JMESPath examples:
-            - "[?role == 'button']" - Find all buttons
+            - "[?role == 'button']" - Find buttons at root
+            - "[].children[?role == 'button']" - Find buttons in first child level
             - "[?contains(nvl(name.value, ''), 'Submit')]" - Find elements with 'Submit' in name
-            - "[?role == 'link'].name.value" - Extract all link names
+            - "[].children[].children[?role == 'link'].name.value" - Extract link names from 2nd level
             - "[?role == 'textbox' && disabled == `true`]" - Find disabled textboxes
 
             Custom functions available:
