@@ -23,6 +23,8 @@ dependencies = [
     "fastmcp>=2.10.3",
     "python-dotenv>=1.0.0",
     "mcp-mapped-resource-lib>=0.1.0",
+    "jmespath>=1.0.0",
+    "pyyaml>=6.0.0",
 ]
 
 [project.optional-dependencies]

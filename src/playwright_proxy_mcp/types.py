@@ -44,3 +44,24 @@ class PlaywrightToolResponse(TypedDict, total=False):
     message: str | None
     data: dict[str, str] | None
     blob_id: str | None
+
+
+class NavigationResponse(TypedDict, total=False):
+    """
+    Response for browser_navigate and browser_snapshot with pagination support.
+
+    Used when navigating to URLs or capturing snapshots with advanced filtering,
+    pagination, and output formatting.
+    """
+
+    success: bool
+    url: str
+    cache_key: str
+    total_items: int
+    offset: int
+    limit: int
+    has_more: bool
+    snapshot: str | None
+    error: str | None
+    query_applied: str | None
+    output_format: str

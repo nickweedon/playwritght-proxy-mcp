@@ -40,13 +40,14 @@ blob_manager = None
 process_manager = None
 middleware = None
 proxy_client = None
+navigation_cache = None
 
 
 @asynccontextmanager
 async def lifespan_context(server):
     """Lifespan context manager for startup and shutdown"""
     global playwright_config, blob_config, blob_manager, process_manager
-    global middleware, proxy_client
+    global middleware, proxy_client, navigation_cache
 
     logger.info("Starting Playwright MCP Proxy...")
 
@@ -70,6 +71,10 @@ async def lifespan_context(server):
 
         # Initialize proxy client
         proxy_client = PlaywrightProxyClient(process_manager, middleware)
+
+        # Initialize navigation cache
+        from .utils.navigation_cache import NavigationCache
+        navigation_cache = NavigationCache(default_ttl=300)
 
         # Start playwright-mcp subprocess
         await proxy_client.start(playwright_config)
@@ -161,17 +166,314 @@ async def _call_playwright_tool(tool_name: str, arguments: dict[str, Any]) -> An
 
 
 @mcp.tool()
-async def browser_navigate(url: str) -> dict[str, Any]:
+async def browser_navigate(
+    url: str,
+    silent_mode: bool = False,
+    jmespath_query: str | None = None,
+    output_format: str = "yaml",
+    cache_key: str | None = None,
+    offset: int = 0,
+    limit: int = 1000,
+) -> Any:
     """
-    Navigate to a URL.
+    Navigate to a URL and capture accessibility snapshot with advanced filtering.
+
+    This tool navigates to the specified URL, captures an ARIA snapshot of the page,
+    and supports advanced filtering, pagination, and output formatting to prevent
+    context flooding from large snapshots.
 
     Args:
         url: The URL to navigate to
+        silent_mode: If True, suppress snapshot output (useful for navigation-only). Default: False
+        jmespath_query: JMESPath expression to filter/transform the ARIA snapshot. Default: None
+
+            The ARIA snapshot is converted from YAML to JSON, then the query is applied.
+
+            CRITICAL SYNTAX NOTE: Field names in ARIA JSON use special characters.
+            You MUST use DOUBLE QUOTES for field identifiers, NOT backticks:
+            - CORRECT: "role", "name", "name.value"
+            - WRONG: `role` (backticks create literal strings, not field references)
+
+            Standard JMESPath examples:
+            - "[?role == 'button']" - Find all buttons
+            - "[?contains(nvl(name.value, ''), 'Submit')]" - Find elements with 'Submit' in name
+            - "[?role == 'link'].name.value" - Extract all link names
+            - "[?role == 'textbox' && disabled == `true`]" - Find disabled textboxes
+
+            Custom functions available:
+            - nvl(value, default): Return default if value is null
+            - int(value): Convert to integer (returns null on failure)
+            - str(value): Convert to string
+            - regex_replace(pattern, replacement, value): Regex substitution
+
+            IMPORTANT: Use nvl() for safe filtering on nullable fields:
+            - "[?contains(nvl(name.value, ''), 'text')]" - safe name search
+
+        output_format: Format for snapshot output. Must be 'json' or 'yaml'. Default: 'yaml'
+        cache_key: Reuse cached snapshot from previous navigation. Omit for fresh fetch. Default: None
+        offset: Starting index for pagination (used with cache_key). Default: 0
+        limit: Maximum items to return in paginated results (1-10000). Default: 1000
 
     Returns:
-        Navigation result
+        NavigationResponse with navigation result and paginated snapshot.
+
+        Response schema:
+        {
+            "success": bool,
+            "url": str,
+            "cache_key": str,  # Use this for subsequent paginated calls
+            "total_items": int,  # Total items in snapshot (after query)
+            "offset": int,
+            "limit": int,
+            "has_more": bool,  # True if more items available
+            "snapshot": str | None,  # Formatted output or None if silent_mode
+            "error": str | None,
+            "query_applied": str | None,
+            "output_format": str
+        }
+
+    Pagination Workflow:
+        1. First call: browser_navigate(url="https://example.com", limit=50)
+           - Returns cache_key="nav_abc123", has_more=True
+
+        2. Next page: browser_navigate(url="https://example.com", cache_key="nav_abc123", offset=50, limit=50)
+           - Reuses cached snapshot, returns next 50 items
+
+        3. Continue until has_more=False
+
+    Notes:
+        - Cache entries expire after 5 minutes of inactivity
+        - JMESPath queries are applied BEFORE pagination
+        - silent_mode=True useful for navigation without token overhead
+        - ARIA snapshots are hierarchical - query results may be nested objects
+
+    See Also:
+        - browser_snapshot: Capture snapshot without navigation
+        - browser_take_screenshot: Visual screenshot instead of ARIA tree
     """
-    return await _call_playwright_tool("browser_navigate", {"url": url})
+    from .types import NavigationResponse
+    from .utils.aria_processor import apply_jmespath_query, format_output, parse_aria_snapshot
+
+    # Check if navigation_cache is initialized
+    if navigation_cache is None:
+        return NavigationResponse(
+            success=False,
+            url=url,
+            error="Navigation cache not initialized",
+            cache_key="",
+            total_items=0,
+            offset=offset,
+            limit=limit,
+            has_more=False,
+            snapshot=None,
+            output_format=output_format,
+        )
+
+    # Validate parameters
+    if output_format.lower() not in ["json", "yaml"]:
+        return NavigationResponse(
+            success=False,
+            url=url,
+            error="output_format must be 'json' or 'yaml'",
+            cache_key="",
+            total_items=0,
+            offset=offset,
+            limit=limit,
+            has_more=False,
+            snapshot=None,
+            output_format=output_format,
+        )
+
+    if offset < 0:
+        return NavigationResponse(
+            success=False,
+            url=url,
+            error="offset must be non-negative",
+            cache_key="",
+            total_items=0,
+            offset=offset,
+            limit=limit,
+            has_more=False,
+            snapshot=None,
+            output_format=output_format,
+        )
+
+    if limit < 1 or limit > 10000:
+        return NavigationResponse(
+            success=False,
+            url=url,
+            error="limit must be between 1 and 10000",
+            cache_key="",
+            total_items=0,
+            offset=offset,
+            limit=limit,
+            has_more=False,
+            snapshot=None,
+            output_format=output_format,
+        )
+
+    # Silent mode: just navigate, no processing
+    if silent_mode:
+        try:
+            await _call_playwright_tool("browser_navigate", {"url": url})
+            return NavigationResponse(
+                success=True,
+                url=url,
+                cache_key="",
+                total_items=0,
+                offset=0,
+                limit=limit,
+                has_more=False,
+                snapshot=None,
+                error=None,
+                output_format=output_format,
+            )
+        except Exception as e:
+            return NavigationResponse(
+                success=False,
+                url=url,
+                error=f"Navigation failed: {e}",
+                cache_key="",
+                total_items=0,
+                offset=0,
+                limit=limit,
+                has_more=False,
+                snapshot=None,
+                output_format=output_format,
+            )
+
+    # Get or fetch snapshot data
+    snapshot_json = None
+    key = ""
+
+    try:
+        if cache_key:
+            # Try to reuse cached snapshot
+            entry = navigation_cache.get(cache_key)
+            if entry:
+                snapshot_json = entry.snapshot_json
+                key = cache_key
+            # If cache miss, fetch fresh (continue below)
+
+        # Fetch fresh if no cache or cache miss
+        if snapshot_json is None:
+            # Call playwright-mcp browser_navigate
+            raw_result = await _call_playwright_tool("browser_navigate", {"url": url})
+
+            # Extract YAML snapshot from response
+            yaml_snapshot = None
+            if isinstance(raw_result, dict) and "content" in raw_result:
+                for item in raw_result["content"]:
+                    if isinstance(item, dict) and item.get("type") == "text":
+                        yaml_snapshot = item.get("text")
+                        break
+
+            if not yaml_snapshot:
+                return NavigationResponse(
+                    success=False,
+                    url=url,
+                    error="No ARIA snapshot found in navigation response",
+                    cache_key="",
+                    total_items=0,
+                    offset=offset,
+                    limit=limit,
+                    has_more=False,
+                    snapshot=None,
+                    output_format=output_format,
+                )
+
+            # Parse YAML snapshot to JSON
+            snapshot_json, parse_errors = parse_aria_snapshot(yaml_snapshot)
+
+            if parse_errors:
+                return NavigationResponse(
+                    success=False,
+                    url=url,
+                    error=f"ARIA snapshot parse errors: {'; '.join(parse_errors)}",
+                    cache_key="",
+                    total_items=0,
+                    offset=offset,
+                    limit=limit,
+                    has_more=False,
+                    snapshot=None,
+                    output_format=output_format,
+                )
+
+            # Store in cache
+            key = navigation_cache.create(url, snapshot_json)
+
+    except Exception as e:
+        return NavigationResponse(
+            success=False,
+            url=url,
+            error=f"Navigation failed: {e}",
+            cache_key="",
+            total_items=0,
+            offset=offset,
+            limit=limit,
+            has_more=False,
+            snapshot=None,
+            output_format=output_format,
+        )
+
+    # Apply JMESPath query if provided
+    result_data = snapshot_json
+    query_applied_str = None
+
+    if jmespath_query:
+        result_data, query_error = apply_jmespath_query(snapshot_json, jmespath_query)
+        if query_error:
+            return NavigationResponse(
+                success=False,
+                url=url,
+                error=query_error,
+                cache_key=key,
+                total_items=0,
+                offset=offset,
+                limit=limit,
+                has_more=False,
+                snapshot=None,
+                query_applied=jmespath_query,
+                output_format=output_format,
+            )
+        query_applied_str = jmespath_query
+
+    # Handle pagination - wrap non-list in array for consistency
+    paginated_data = None
+    total = 0
+    has_more = False
+
+    if isinstance(result_data, list):
+        total = len(result_data)
+        paginated_data = result_data[offset : offset + limit]
+        has_more = offset + limit < total
+    else:
+        # Single result - wrap in array
+        result_data = [result_data]
+        total = 1
+        if offset == 0:
+            paginated_data = result_data
+        else:
+            paginated_data = []  # offset beyond single result
+        has_more = False
+
+    # Format output
+    formatted_output = format_output(paginated_data, output_format)
+
+    # Return response
+    return NavigationResponse(
+        success=True,
+        url=url,
+        cache_key=key,
+        total_items=total,
+        offset=offset,
+        limit=limit,
+        has_more=has_more,
+        snapshot=formatted_output,
+        error=None,
+        query_applied=query_applied_str,
+        output_format=output_format.lower(),
+    )
 
 
 @mcp.tool()
@@ -334,21 +636,308 @@ async def browser_evaluate(
 
 
 @mcp.tool()
-async def browser_snapshot(filename: str | None = None) -> dict[str, Any]:
+async def browser_snapshot(
+    filename: str | None = None,
+    silent_mode: bool = False,
+    jmespath_query: str | None = None,
+    output_format: str = "yaml",
+    cache_key: str | None = None,
+    offset: int = 0,
+    limit: int = 1000,
+) -> Any:
     """
-    Capture accessibility snapshot of the current page, this is better than screenshot.
+    Capture accessibility snapshot of the current page with advanced filtering.
+
+    This tool captures an ARIA snapshot of the current page and supports advanced
+    filtering, pagination, and output formatting to prevent context flooding from
+    large snapshots. This is better than screenshot for automation.
 
     Args:
         filename: Save snapshot to markdown file instead of returning it in the response.
+                  When provided, other filtering options are ignored.
+        silent_mode: If True, suppress snapshot output (useful for snapshot-only). Default: False
+        jmespath_query: JMESPath expression to filter/transform the ARIA snapshot. Default: None
+
+            The ARIA snapshot is converted from YAML to JSON, then the query is applied.
+
+            CRITICAL SYNTAX NOTE: Field names in ARIA JSON use special characters.
+            You MUST use DOUBLE QUOTES for field identifiers, NOT backticks:
+            - CORRECT: "role", "name", "name.value"
+            - WRONG: `role` (backticks create literal strings, not field references)
+
+            Standard JMESPath examples:
+            - "[?role == 'button']" - Find all buttons
+            - "[?contains(nvl(name.value, ''), 'Submit')]" - Find elements with 'Submit' in name
+            - "[?role == 'link'].name.value" - Extract all link names
+            - "[?role == 'textbox' && disabled == `true`]" - Find disabled textboxes
+
+            Custom functions available:
+            - nvl(value, default): Return default if value is null
+            - int(value): Convert to integer (returns null on failure)
+            - str(value): Convert to string
+            - regex_replace(pattern, replacement, value): Regex substitution
+
+            IMPORTANT: Use nvl() for safe filtering on nullable fields:
+            - "[?contains(nvl(name.value, ''), 'text')]" - safe name search
+
+        output_format: Format for snapshot output. Must be 'json' or 'yaml'. Default: 'yaml'
+        cache_key: Reuse cached snapshot from previous call. Omit for fresh fetch. Default: None
+        offset: Starting index for pagination (used with cache_key). Default: 0
+        limit: Maximum items to return in paginated results (1-10000). Default: 1000
 
     Returns:
-        Page snapshot or save confirmation
-    """
-    args = {}
-    if filename is not None:
-        args["filename"] = filename
+        NavigationResponse with snapshot result and paginated data (or file save confirmation).
 
-    return await _call_playwright_tool("browser_snapshot", args)
+        When filename is provided, returns standard playwright response.
+        Otherwise, returns NavigationResponse with same schema as browser_navigate.
+
+    Pagination Workflow:
+        1. First call: browser_snapshot(limit=50)
+           - Returns cache_key="nav_abc123", has_more=True
+
+        2. Next page: browser_snapshot(cache_key="nav_abc123", offset=50, limit=50)
+           - Reuses cached snapshot, returns next 50 items
+
+        3. Continue until has_more=False
+
+    Notes:
+        - Cache entries expire after 5 minutes of inactivity
+        - JMESPath queries are applied BEFORE pagination
+        - silent_mode=True useful for capturing without token overhead
+        - ARIA snapshots are hierarchical - query results may be nested objects
+
+    See Also:
+        - browser_navigate: Navigate and capture snapshot
+        - browser_take_screenshot: Visual screenshot instead of ARIA tree
+    """
+    # If filename provided, use original behavior
+    if filename is not None:
+        args = {"filename": filename}
+        return await _call_playwright_tool("browser_snapshot", args)
+
+    from .types import NavigationResponse
+    from .utils.aria_processor import apply_jmespath_query, format_output, parse_aria_snapshot
+
+    # Check if navigation_cache is initialized
+    if navigation_cache is None:
+        return NavigationResponse(
+            success=False,
+            url="",
+            error="Navigation cache not initialized",
+            cache_key="",
+            total_items=0,
+            offset=offset,
+            limit=limit,
+            has_more=False,
+            snapshot=None,
+            output_format=output_format,
+        )
+
+    # Validate parameters
+    if output_format.lower() not in ["json", "yaml"]:
+        return NavigationResponse(
+            success=False,
+            url="",
+            error="output_format must be 'json' or 'yaml'",
+            cache_key="",
+            total_items=0,
+            offset=offset,
+            limit=limit,
+            has_more=False,
+            snapshot=None,
+            output_format=output_format,
+        )
+
+    if offset < 0:
+        return NavigationResponse(
+            success=False,
+            url="",
+            error="offset must be non-negative",
+            cache_key="",
+            total_items=0,
+            offset=offset,
+            limit=limit,
+            has_more=False,
+            snapshot=None,
+            output_format=output_format,
+        )
+
+    if limit < 1 or limit > 10000:
+        return NavigationResponse(
+            success=False,
+            url="",
+            error="limit must be between 1 and 10000",
+            cache_key="",
+            total_items=0,
+            offset=offset,
+            limit=limit,
+            has_more=False,
+            snapshot=None,
+            output_format=output_format,
+        )
+
+    # Silent mode: just capture, no processing
+    if silent_mode:
+        try:
+            await _call_playwright_tool("browser_snapshot", {})
+            return NavigationResponse(
+                success=True,
+                url="",
+                cache_key="",
+                total_items=0,
+                offset=0,
+                limit=limit,
+                has_more=False,
+                snapshot=None,
+                error=None,
+                output_format=output_format,
+            )
+        except Exception as e:
+            return NavigationResponse(
+                success=False,
+                url="",
+                error=f"Snapshot failed: {e}",
+                cache_key="",
+                total_items=0,
+                offset=0,
+                limit=limit,
+                has_more=False,
+                snapshot=None,
+                output_format=output_format,
+            )
+
+    # Get or fetch snapshot data
+    snapshot_json = None
+    key = ""
+
+    try:
+        if cache_key:
+            # Try to reuse cached snapshot
+            entry = navigation_cache.get(cache_key)
+            if entry:
+                snapshot_json = entry.snapshot_json
+                key = cache_key
+            # If cache miss, fetch fresh (continue below)
+
+        # Fetch fresh if no cache or cache miss
+        if snapshot_json is None:
+            # Call playwright-mcp browser_snapshot
+            raw_result = await _call_playwright_tool("browser_snapshot", {})
+
+            # Extract YAML snapshot from response
+            yaml_snapshot = None
+            if isinstance(raw_result, dict) and "content" in raw_result:
+                for item in raw_result["content"]:
+                    if isinstance(item, dict) and item.get("type") == "text":
+                        yaml_snapshot = item.get("text")
+                        break
+
+            if not yaml_snapshot:
+                return NavigationResponse(
+                    success=False,
+                    url="",
+                    error="No ARIA snapshot found in response",
+                    cache_key="",
+                    total_items=0,
+                    offset=offset,
+                    limit=limit,
+                    has_more=False,
+                    snapshot=None,
+                    output_format=output_format,
+                )
+
+            # Parse YAML snapshot to JSON
+            snapshot_json, parse_errors = parse_aria_snapshot(yaml_snapshot)
+
+            if parse_errors:
+                return NavigationResponse(
+                    success=False,
+                    url="",
+                    error=f"ARIA snapshot parse errors: {'; '.join(parse_errors)}",
+                    cache_key="",
+                    total_items=0,
+                    offset=offset,
+                    limit=limit,
+                    has_more=False,
+                    snapshot=None,
+                    output_format=output_format,
+                )
+
+            # Store in cache (use empty URL for snapshots)
+            key = navigation_cache.create("", snapshot_json)
+
+    except Exception as e:
+        return NavigationResponse(
+            success=False,
+            url="",
+            error=f"Snapshot failed: {e}",
+            cache_key="",
+            total_items=0,
+            offset=offset,
+            limit=limit,
+            has_more=False,
+            snapshot=None,
+            output_format=output_format,
+        )
+
+    # Apply JMESPath query if provided
+    result_data = snapshot_json
+    query_applied_str = None
+
+    if jmespath_query:
+        result_data, query_error = apply_jmespath_query(snapshot_json, jmespath_query)
+        if query_error:
+            return NavigationResponse(
+                success=False,
+                url="",
+                error=query_error,
+                cache_key=key,
+                total_items=0,
+                offset=offset,
+                limit=limit,
+                has_more=False,
+                snapshot=None,
+                query_applied=jmespath_query,
+                output_format=output_format,
+            )
+        query_applied_str = jmespath_query
+
+    # Handle pagination - wrap non-list in array for consistency
+    paginated_data = None
+    total = 0
+    has_more = False
+
+    if isinstance(result_data, list):
+        total = len(result_data)
+        paginated_data = result_data[offset : offset + limit]
+        has_more = offset + limit < total
+    else:
+        # Single result - wrap in array
+        result_data = [result_data]
+        total = 1
+        if offset == 0:
+            paginated_data = result_data
+        else:
+            paginated_data = []  # offset beyond single result
+        has_more = False
+
+    # Format output
+    formatted_output = format_output(paginated_data, output_format)
+
+    # Return response
+    return NavigationResponse(
+        success=True,
+        url="",
+        cache_key=key,
+        total_items=total,
+        offset=offset,
+        limit=limit,
+        has_more=has_more,
+        snapshot=formatted_output,
+        error=None,
+        query_applied=query_applied_str,
+        output_format=output_format.lower(),
+    )
 
 
 @mcp.tool()
