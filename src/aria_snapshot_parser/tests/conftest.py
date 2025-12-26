@@ -39,3 +39,9 @@ def regex_yaml(fixtures_dir: Path) -> str:
 def simple_expected_json(fixtures_dir: Path) -> str:
     """Load expected JSON for simple test case."""
     return (fixtures_dir / "simple_expected.json").read_text()
+
+
+@pytest.fixture
+def example_domain_yaml(fixtures_dir: Path) -> str:
+    """Load example domain YAML."""
+    return (fixtures_dir / "example_domain.yaml").read_text()

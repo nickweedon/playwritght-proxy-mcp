@@ -152,3 +152,32 @@ class TestAriaSnapshotParser:
         assert tree[0].role == "link"
         assert len(tree[0].children) == 1
         assert tree[0].children[0] == "Search for Images"
+
+    def test_parse_example_domain(self, example_domain_yaml: str):
+        """Test parsing example domain with nested structure and colon syntax."""
+        tree, errors = parse(example_domain_yaml)
+
+        assert len(errors) == 0
+        assert tree is not None
+        assert len(tree) == 1
+
+        # Check root generic element
+        generic = tree[0]
+        assert generic.role == "generic"
+        assert generic.ref == "e2"
+
+        # Check children
+        assert len(generic.children) == 2
+
+        # Check heading child
+        heading = generic.children[0]
+        assert heading.role == "heading"
+        assert heading.name.value == "Example Domain"
+        assert heading.level == 1
+        assert heading.ref == "e3"
+
+        # Check paragraph child
+        paragraph = generic.children[1]
+        assert paragraph.role == "paragraph"
+        assert paragraph.ref == "e4"
+        assert paragraph.name.value == "This domain is for use in documentation examples without needing permission. Avoid use in operations."
