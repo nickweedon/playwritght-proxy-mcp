@@ -94,6 +94,27 @@
         "run",
         "playwright-proxy-mcp"
       ]
+    },
+    "playwright-extension-mcp-server-wsl": {
+      "comment": "WSL native deployment (no Docker) - Playwright MCP Server for use with browser extension to directly manipulate pages via the user's browser session. SETUP: In WSL terminal run: cd /opt/src/mcp/playwright-proxy-mcp && uv sync && mkdir -p /mnt/c/docker/blob-storage",
+      "command": "uv",
+      "args": [
+        "run",
+        "--directory",
+        "/opt/src/mcp/playwright-proxy-mcp",
+        "playwright-proxy-mcp"
+      ],
+      "env": {
+        "BLOB_STORAGE_ROOT": "/mnt/c/docker/blob-storage",
+        "BLOB_MAX_SIZE_MB": "2048",
+        "BLOB_TTL_HOURS": "24",
+        "BLOB_SIZE_THRESHOLD_KB": "50",
+        "BLOB_CLEANUP_INTERVAL_MINUTES": "60",
+        "PLAYWRIGHT_CAPS": "vision,pdf",
+        "PLAYWRIGHT_TIMEOUT_ACTION": "5000",
+        "PLAYWRIGHT_TIMEOUT_NAVIGATION": "60000",
+        "PLAYWRIGHT_EXTENSION": "true"
+      }
     }
   }
 }
