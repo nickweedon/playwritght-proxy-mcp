@@ -16,6 +16,7 @@ from typing import Any
 
 from fastmcp import FastMCP
 
+from .middleware import MCPLoggingMiddleware
 from .playwright import (
     BinaryInterceptionMiddleware,
     PlaywrightBlobManager,
@@ -127,6 +128,10 @@ mcp = FastMCP(
     """,
     lifespan=lifespan_context,
 )
+
+# Register MCP request/response logging middleware
+# Logs all client MCP requests with "CLIENT_MCP" prefix for easy filtering
+mcp.add_middleware(MCPLoggingMiddleware(log_request_params=True, log_response_data=False))
 
 
 # =============================================================================
