@@ -133,7 +133,8 @@ class MCPLoggingMiddleware(Middleware):
             result = await call_next(context)
             duration = (time.time() - start_time) * 1000  # ms
 
-            tool_count = len(result.get("tools", []))
+            # result is a Sequence[Tool], not a dict
+            tool_count = len(result) if result else 0
             logger.info(f"CLIENT_MCP ← List tools result: {tool_count} tools ({duration:.2f}ms)")
             return result
 
@@ -154,7 +155,8 @@ class MCPLoggingMiddleware(Middleware):
             result = await call_next(context)
             duration = (time.time() - start_time) * 1000  # ms
 
-            resource_count = len(result.get("resources", []))
+            # result is a Sequence[Resource], not a dict
+            resource_count = len(result) if result else 0
             logger.info(
                 f"CLIENT_MCP ← List resources result: {resource_count} resources ({duration:.2f}ms)"
             )
@@ -177,7 +179,8 @@ class MCPLoggingMiddleware(Middleware):
             result = await call_next(context)
             duration = (time.time() - start_time) * 1000  # ms
 
-            prompt_count = len(result.get("prompts", []))
+            # result is a Sequence[Prompt], not a dict
+            prompt_count = len(result) if result else 0
             logger.info(
                 f"CLIENT_MCP ← List prompts result: {prompt_count} prompts ({duration:.2f}ms)"
             )
