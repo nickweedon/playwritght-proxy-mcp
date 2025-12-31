@@ -17,7 +17,7 @@ from playwright_proxy_mcp.types import NavigationResponse
 def mock_proxy_client():
     """Create a mock proxy client for testing."""
     mock_client = Mock()
-    mock_client.is_healthy.return_value = True
+    mock_client.is_healthy = AsyncMock(return_value=True)
     mock_client.call_tool = AsyncMock()
     return mock_client
 
@@ -124,15 +124,18 @@ async def test_browser_navigate_with_jmespath_query(mock_proxy_client, mock_navi
 
 @pytest.mark.asyncio
 async def test_browser_navigate_pagination(mock_proxy_client, mock_navigation_cache):
-    """Test browser_navigate with pagination."""
+    """Test browser_navigate with pagination requires JMESPath query."""
     from playwright_proxy_mcp import server
 
-    # Mock the playwright response with multiple items
+    # Mock the playwright response with ARIA-formatted YAML (100 buttons)
+    # ARIA format uses special syntax: - button "Name" [ref=eX]
+    aria_buttons = '\n'.join([f'- button "Button{i}" [ref=e{i}]' for i in range(100)])
+
     mock_proxy_client.call_tool.return_value = {
         "content": [
             {
                 "type": "text",
-                "text": "\n".join([f'- button "Button{i}" [ref=e{i}]' for i in range(100)])
+                "text": aria_buttons
             }
         ]
     }
@@ -140,13 +143,23 @@ async def test_browser_navigate_pagination(mock_proxy_client, mock_navigation_ca
     with patch.object(server, "proxy_client", mock_proxy_client), \
          patch.object(server, "navigation_cache", mock_navigation_cache):
 
+        # Test 1: Pagination without query should fail
         result = await server.browser_navigate.fn(
             url="https://example.com",
             limit=20
         )
+        assert result["success"] is False
+        assert "Pagination (offset/limit) requires jmespath_query" in result["error"]
 
-        # Verify pagination
-        assert result["success"] is True
+        # Test 2: Pagination with query should work
+        result = await server.browser_navigate.fn(
+            url="https://example.com",
+            jmespath_query="[?role == `button`]",  # Filter buttons
+            limit=20
+        )
+
+        # Verify pagination works with query
+        assert result["success"] is True, f"Expected success but got error: {result.get('error')}"
         assert result["total_items"] == 100
         assert result["limit"] == 20
         assert result["offset"] == 0

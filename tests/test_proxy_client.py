@@ -2,7 +2,7 @@
 Tests for playwright proxy client
 """
 
-from unittest.mock import AsyncMock, Mock
+from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
 
@@ -15,7 +15,9 @@ def mock_process_manager():
     manager = Mock()
     manager.start = AsyncMock()
     manager.stop = AsyncMock()
-    manager.is_healthy = Mock(return_value=True)
+    manager.is_healthy = AsyncMock(return_value=True)
+    manager.get_port = Mock(return_value=3000)  # Return actual port number
+    manager._playwright_host = "127.0.0.1"  # Add host attribute
 
     # Create mock process with stdin/stdout
     mock_process = Mock()
@@ -59,15 +61,20 @@ class TestPlaywrightProxyClient:
         """Test starting the proxy client."""
         config = {"browser": "chromium"}
 
-        # Mock the internal async methods
-        proxy_client._initialize_mcp = AsyncMock()
+        # Mock the FastMCP Client and its methods
+        mock_client = Mock()
+        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client.__aexit__ = AsyncMock()
+
+        # Mock the _discover_tools method
         proxy_client._discover_tools = AsyncMock()
 
-        await proxy_client.start(config)
+        # Patch Client creation
+        with patch('playwright_proxy_mcp.playwright.proxy_client.Client', return_value=mock_client):
+            await proxy_client.start(config)
 
         assert proxy_client._started
         mock_process_manager.start.assert_called_once_with(config)
-        proxy_client._initialize_mcp.assert_called_once()
         proxy_client._discover_tools.assert_called_once()
 
     @pytest.mark.asyncio
@@ -75,12 +82,18 @@ class TestPlaywrightProxyClient:
         """Test starting when already started."""
         config = {"browser": "chromium"}
 
-        # Mock the internal async methods
-        proxy_client._initialize_mcp = AsyncMock()
+        # Mock the FastMCP Client and its methods
+        mock_client = Mock()
+        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client.__aexit__ = AsyncMock()
+
+        # Mock the _discover_tools method
         proxy_client._discover_tools = AsyncMock()
 
-        await proxy_client.start(config)
-        await proxy_client.start(config)
+        # Patch Client creation
+        with patch('playwright_proxy_mcp.playwright.proxy_client.Client', return_value=mock_client):
+            await proxy_client.start(config)
+            await proxy_client.start(config)
 
         # Should only start once
         assert proxy_client._started
@@ -89,14 +102,20 @@ class TestPlaywrightProxyClient:
     @pytest.mark.asyncio
     async def test_stop(self, proxy_client, mock_process_manager):
         """Test stopping the proxy client."""
-        # Mock the internal async methods
-        proxy_client._initialize_mcp = AsyncMock()
+        # Mock the FastMCP Client and its methods
+        mock_client = Mock()
+        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client.__aexit__ = AsyncMock()
+
+        # Mock the _discover_tools method
         proxy_client._discover_tools = AsyncMock()
 
-        # Start first
-        await proxy_client.start({"browser": "chromium"})
+        # Patch Client creation
+        with patch('playwright_proxy_mcp.playwright.proxy_client.Client', return_value=mock_client):
+            # Start first
+            await proxy_client.start({"browser": "chromium"})
 
-        await proxy_client.stop()
+            await proxy_client.stop()
 
         assert not proxy_client._started
         mock_process_manager.stop.assert_called_once()
@@ -109,23 +128,28 @@ class TestPlaywrightProxyClient:
         # Should not call stop on process manager
         mock_process_manager.stop.assert_not_called()
 
-    def test_is_healthy_started(self, proxy_client, mock_process_manager):
+    @pytest.mark.asyncio
+    async def test_is_healthy_started(self, proxy_client, mock_process_manager):
         """Test health check when started and healthy."""
         proxy_client._started = True
-        mock_process_manager.is_healthy.return_value = True
+        proxy_client._client = Mock()  # Set client to non-None
+        # is_healthy is already an AsyncMock, just set its return value
+        mock_process_manager.is_healthy = AsyncMock(return_value=True)
 
-        assert proxy_client.is_healthy()
+        assert await proxy_client.is_healthy()
 
-    def test_is_healthy_not_started(self, proxy_client):
+    @pytest.mark.asyncio
+    async def test_is_healthy_not_started(self, proxy_client):
         """Test health check when not started."""
-        assert not proxy_client.is_healthy()
+        assert not await proxy_client.is_healthy()
 
-    def test_is_healthy_unhealthy_process(self, proxy_client, mock_process_manager):
+    @pytest.mark.asyncio
+    async def test_is_healthy_unhealthy_process(self, proxy_client, mock_process_manager):
         """Test health check when process is unhealthy."""
         proxy_client._started = True
         mock_process_manager.is_healthy.return_value = False
 
-        assert not proxy_client.is_healthy()
+        assert not await proxy_client.is_healthy()
 
     @pytest.mark.asyncio
     async def test_transform_response(self, proxy_client, mock_middleware):

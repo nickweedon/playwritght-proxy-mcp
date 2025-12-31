@@ -7,6 +7,7 @@ integrating middleware for response transformation.
 Uses FastMCP Client with StreamableHttpTransport for HTTP-based communication.
 """
 
+import asyncio
 import logging
 import time
 from typing import Any
@@ -14,7 +15,6 @@ from typing import Any
 from fastmcp.client import Client
 from fastmcp.client.transports import StreamableHttpTransport
 
-from .config import PLAYWRIGHT_HTTP_HOST
 from .middleware import BinaryInterceptionMiddleware
 from .process_manager import PlaywrightProcessManager
 
@@ -67,9 +67,12 @@ class PlaywrightProxyClient:
         actual_port = self.process_manager.get_port()
         logger.info(f"Connecting to playwright-mcp on port {actual_port}")
 
-        # Create HTTP transport with discovered port
+        # Get the playwright host from process manager (127.0.0.1 or WSL host IP)
+        playwright_host = self.process_manager._playwright_host
+
+        # Create HTTP transport with discovered port and host
         transport = StreamableHttpTransport(
-            url=f"http://{PLAYWRIGHT_HTTP_HOST}:{actual_port}/mcp"
+            url=f"http://{playwright_host}:{actual_port}/mcp"
         )
 
         # Create and connect FastMCP client
@@ -144,13 +147,52 @@ class PlaywrightProxyClient:
             logger.error(f"UPSTREAM_MCP ✗ Tool discovery failed: {e}")
             raise RuntimeError(f"Failed to discover tools: {e}") from e
 
-    async def call_tool(self, tool_name: str, arguments: dict[str, Any]) -> Any:
+    async def _reconnect_client(self) -> None:
+        """
+        Reconnect the FastMCP client to the upstream playwright-mcp server.
+
+        This is called when a session termination error is detected to attempt
+        to recover the connection.
+        """
+        logger.info("UPSTREAM_MCP ⟳ Reconnecting client...")
+
+        # Disconnect existing client
+        if self._client:
+            try:
+                await self._client.__aexit__(None, None, None)
+            except Exception as e:
+                logger.warning(f"Error during client disconnect: {e}")
+            finally:
+                self._client = None
+
+        # Get the actual port from process manager
+        actual_port = self.process_manager.get_port()
+
+        # Get the playwright host from process manager (127.0.0.1 or WSL host IP)
+        playwright_host = self.process_manager._playwright_host
+
+        # Create new HTTP transport with discovered port and host
+        transport = StreamableHttpTransport(
+            url=f"http://{playwright_host}:{actual_port}/mcp"
+        )
+
+        # Create and connect new FastMCP client
+        self._client = Client(transport=transport)
+        await self._client.__aenter__()
+
+        # Re-discover tools to verify connection
+        await self._discover_tools()
+
+        logger.info("UPSTREAM_MCP ← Client reconnected successfully")
+
+    async def call_tool(self, tool_name: str, arguments: dict[str, Any], _retry_count: int = 0) -> Any:
         """
         Call a tool on the upstream playwright-mcp server.
 
         Args:
             tool_name: Name of the tool to call
             arguments: Tool arguments
+            _retry_count: Internal retry counter (for session recovery)
 
         Returns:
             Tool result (potentially transformed by middleware)
@@ -163,11 +205,19 @@ class PlaywrightProxyClient:
 
         start_time = time.time()
 
+        # 90-second timeout for tool calls, this is in addition to PLAYWRIGHT_TIMEOUT_NAVIGATION and PLAYWRIGHT_TIMEOUT_ACTION
+        timeout_seconds = 90.0  
         try:
             logger.info(f"UPSTREAM_MCP → Calling tool: {tool_name}")
 
-            # Call tool via FastMCP client
-            result = await self._client.call_tool(tool_name, arguments)
+            # Call tool via FastMCP client with 90-second timeout
+            # This prevents indefinite hangs when playwright-mcp gets stuck
+            # (e.g., browser_navigate_back in certain browser states)
+            result = await asyncio.wait_for(
+                self._client.call_tool(tool_name, arguments),
+                timeout=timeout_seconds
+            )
+            logger.info(f"Raw tool result for {tool_name}: {result}")
 
             # Check for errors (FastMCP Client uses snake_case: is_error)
             if result.is_error:
@@ -185,8 +235,33 @@ class PlaywrightProxyClient:
 
             return transformed_result
 
+        except asyncio.TimeoutError as e:
+            duration = (time.time() - start_time) * 1000  # ms
+            logger.error(
+                f"UPSTREAM_MCP ✗ Tool call timeout: {tool_name} ({duration:.2f}ms) - "
+                f"Exceeded {timeout_seconds:.0f} second timeout"
+            )
+            raise RuntimeError(f"Tool call timeout after {timeout_seconds:.0f} seconds: {tool_name}") from e
+
         except Exception as e:
             duration = (time.time() - start_time) * 1000  # ms
+
+            # Check if this is a session termination error and retry once
+            error_str = str(e).lower()
+            if ("session terminated" in error_str or "session not found" in error_str) and _retry_count == 0:
+                logger.warning(
+                    f"UPSTREAM_MCP ⟳ Session terminated, attempting to reconnect and retry: {tool_name} ({duration:.2f}ms)"
+                )
+
+                # Attempt to reconnect the client
+                try:
+                    await self._reconnect_client()
+                    # Retry the tool call once
+                    return await self.call_tool(tool_name, arguments, _retry_count=1)
+                except Exception as reconnect_error:
+                    logger.error(f"UPSTREAM_MCP ✗ Reconnection failed: {reconnect_error}")
+                    raise RuntimeError(f"Session terminated and reconnection failed: {e}") from e
+
             logger.error(
                 f"UPSTREAM_MCP ✗ Tool call failed: {tool_name} ({duration:.2f}ms) - "
                 f"{type(e).__name__}: {e}"

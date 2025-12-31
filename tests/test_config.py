@@ -13,10 +13,10 @@ class TestPlaywrightConfig:
         config = load_playwright_config()
 
         assert config["browser"] == "chromium"
-        assert config["headless"] is True
+        assert config["headless"] is False  # Default changed to False
         assert config["caps"] == "vision,pdf"
-        assert config["timeout_action"] == 5000
-        assert config["timeout_navigation"] == 60000
+        assert config["timeout_action"] == 15000  # Updated default
+        assert config["timeout_navigation"] == 5000  # Updated default
 
     def test_load_config_from_env(self, monkeypatch):
         """Test loading configuration from environment variables."""

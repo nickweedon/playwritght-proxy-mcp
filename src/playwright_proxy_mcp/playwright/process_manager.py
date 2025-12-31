@@ -11,7 +11,7 @@ import shutil
 from asyncio.subprocess import Process
 
 from ..utils.logging_config import get_logger, log_dict
-from .config import PLAYWRIGHT_HTTP_HOST, PLAYWRIGHT_HTTP_PORT, PlaywrightConfig
+from .config import PLAYWRIGHT_HTTP_PORT, PlaywrightConfig
 
 logger = get_logger(__name__)
 
@@ -23,6 +23,7 @@ class PlaywrightProcessManager:
         self.process: Process | None = None
         self._shutdown_event = asyncio.Event()
         self._actual_port: int | None = None  # Discovered port from server output
+        self._playwright_host: str = "127.0.0.1"  # Host to connect to (localhost or WSL host IP)
 
     async def start(self, config: PlaywrightConfig) -> Process:
         """
@@ -41,72 +42,54 @@ class PlaywrightProcessManager:
         logger.info("Configuring playwright-mcp subprocess")
         logger.info("=" * 80)
 
-        # Prefer Linux-native Node.js over Windows interop
-        # Check for nvm installation first
-        home_dir = os.path.expanduser("~")
-        nvm_dir = os.path.join(home_dir, ".nvm")
-        nvm_node_path = None
+        # Check if we're connecting to Windows host from WSL
+        wsl_host_ip = os.getenv("PLAYWRIGHT_WSL_HOST_CONNECT")
 
-        if os.path.isdir(nvm_dir):
-            # Find the default or latest node version in nvm
-            versions_dir = os.path.join(nvm_dir, "versions", "node")
-            if os.path.isdir(versions_dir):
-                versions = [d for d in os.listdir(versions_dir) if os.path.isdir(os.path.join(versions_dir, d))]
-                if versions:
-                    # Sort versions and take the latest
-                    versions.sort(reverse=True)
-                    latest_version = versions[0]
-                    nvm_node_path = os.path.join(versions_dir, latest_version, "bin")
-                    logger.info(f"Found nvm Node.js installation: {latest_version} at {nvm_node_path}")
+        if wsl_host_ip:
+            # WSL->Windows mode: use cmd.exe to execute Windows npx.cmd
+            logger.info(f"WSL->Windows mode enabled (PLAYWRIGHT_WSL_HOST_CONNECT={wsl_host_ip})")
+            logger.info("Using Windows npx.cmd via cmd.exe")
 
-        # Check if npx is available, preferring nvm installation
-        npx_path = None
-        node_path = None
-        if nvm_node_path:
-            nvm_npx = os.path.join(nvm_node_path, "npx")
-            nvm_node = os.path.join(nvm_node_path, "node")
-            if os.path.isfile(nvm_npx) and os.path.isfile(nvm_node):
-                npx_path = nvm_npx
-                node_path = nvm_node
-                logger.info(f"Using nvm npx: {npx_path}")
-                logger.info(f"Using nvm node: {node_path}")
-
-        if not npx_path:
-            npx_path = shutil.which("npx")
-            node_path = shutil.which("node")
-
-        if not npx_path:
-            logger.error("npx not found in PATH or nvm installation")
-            raise RuntimeError(
-                "npx not found. Please ensure Node.js is installed and npx is in PATH."
-            )
-        logger.info(f"npx found at: {npx_path}")
-
-        # Verify we're using a Linux binary (not Windows .exe via WSL interop)
-        if node_path:
-            try:
-                import subprocess
-                result = subprocess.run(
-                    ["file", node_path],
-                    capture_output=True,
-                    text=True,
-                    timeout=5
+            # Find cmd.exe in PATH
+            cmd_exe = shutil.which("cmd.exe")
+            if not cmd_exe:
+                logger.error("cmd.exe not found in PATH")
+                raise RuntimeError(
+                    "cmd.exe not found in PATH. When PLAYWRIGHT_WSL_HOST_CONNECT is set, "
+                    "cmd.exe must be available to execute Windows npx.cmd."
                 )
-                if "ELF" in result.stdout:
-                    logger.info(f"✓ Verified Linux ELF binary: {node_path}")
-                elif "Windows" in result.stdout or ".exe" in result.stdout.lower():
-                    logger.warning(
-                        f"⚠ Windows binary detected: {node_path}. "
-                        "This may cause UNC path issues in WSL. "
-                        "Consider installing Linux-native Node.js via nvm."
-                    )
-                else:
-                    logger.info(f"Node binary type: {result.stdout.strip()}")
-            except Exception as e:
-                logger.debug(f"Could not verify node binary type: {e}")
 
-        # Build command using the resolved npx path
-        command = await self._build_command(config, npx_path)
+            # Use cmd.exe /c npx.cmd for Windows Node.js
+            npx_command_parts = [cmd_exe, "/c", "npx.cmd"]
+            logger.info(f"Using command: {npx_command_parts}")
+
+            # Set the host IP for connecting to Windows
+            playwright_host = wsl_host_ip
+        else:
+            # Standard mode: use npx from PATH
+            logger.info("Standard mode (no PLAYWRIGHT_WSL_HOST_CONNECT set)")
+            logger.info("Using npx from PATH")
+
+            npx_path = shutil.which("npx")
+            if not npx_path:
+                logger.error("npx not found in PATH")
+                raise RuntimeError(
+                    "npx not found in PATH. Please ensure Node.js is installed."
+                )
+
+            npx_command_parts = [npx_path]
+            logger.info(f"Found npx at: {npx_path}")
+
+            # Use localhost for standard mode
+            playwright_host = "127.0.0.1"
+
+        # Store the playwright host for later use in health checks
+        self._playwright_host = playwright_host
+        logger.info(f"Playwright server will bind to: {playwright_host if wsl_host_ip else '127.0.0.1'}")
+        logger.info(f"Proxy will connect to: {playwright_host}")
+
+        # Build command using the resolved npx command parts and host
+        command = await self._build_command(config, npx_command_parts, playwright_host)
 
         logger.info("Playwright MCP command configuration:")
         logger.info(f"  Command: {'\n'.join(command)}")
@@ -118,27 +101,12 @@ class PlaywrightProcessManager:
 
         try:
             # Prepare environment variables for subprocess
-            #env = {k: v for k, v in os.environ.items() if k in ["PATH", "NODE_ENV"]}
             env = os.environ.copy()
-
-            # Ensure nvm node binaries are in PATH (if using nvm)
-            if nvm_node_path:
-                # Prepend nvm path to ensure it takes precedence over Windows Node.js
-                current_path = env.get("PATH", "")
-                env["PATH"] = f"{nvm_node_path}:{current_path}"
-                logger.info(f"Prepended nvm path to PATH: {nvm_node_path}")
 
             # Pass through extension token if configured
             if "extension_token" in config and config["extension_token"]:
                 env["PLAYWRIGHT_MCP_EXTENSION_TOKEN"] = config["extension_token"]
-
-            # Log subprocess environment variables
-            if env:
-                logger.info("Subprocess environment variables:")
-                for key, value in env.items():
-                    logger.info(f"  {key}: {value}")
-            else:
-                logger.info("No subprocess environment variables set")
+                logger.info("Set PLAYWRIGHT_MCP_EXTENSION_TOKEN in subprocess environment")
 
             logger.info("Launching playwright-mcp subprocess...")
 
@@ -312,7 +280,7 @@ class PlaywrightProcessManager:
         try:
             async with aiohttp.ClientSession() as session:
                 async with session.get(
-                    f"http://{PLAYWRIGHT_HTTP_HOST}:{self._actual_port}/mcp",
+                    f"http://{self._playwright_host}:{self._actual_port}/mcp",
                     timeout=aiohttp.ClientTimeout(total=2.0),
                 ) as resp:
                     # Accept various status codes - just checking if server responds
@@ -353,7 +321,7 @@ class PlaywrightProcessManager:
             return False
 
         # Now poll the endpoint with the discovered port
-        url = f"http://{PLAYWRIGHT_HTTP_HOST}:{self._actual_port}/mcp"
+        url = f"http://{self._playwright_host}:{self._actual_port}/mcp"
         logger.info(f"Polling HTTP endpoint: {url}")
 
         while (asyncio.get_event_loop().time() - start_time) < timeout:
@@ -386,12 +354,16 @@ class PlaywrightProcessManager:
         Uses UPSTREAM_MCP prefix to distinguish from proxy logs.
         """
         if not self.process or not self.process.stdout:
+            logger.error("No stdout to log from subprocess")
             return
+
+        logger.debug("Logging stdout from subprocess")
 
         try:
             while True:
                 line = await self.process.stdout.readline()
                 if not line:
+                    logger.debug("No more stdout output from subprocess")
                     break
 
                 # Decode and log stdout output
@@ -412,7 +384,10 @@ class PlaywrightProcessManager:
         Also extracts the actual port from the "Listening on" message.
         """
         if not self.process or not self.process.stderr:
+            logger.error("No stderr to log from subprocess")
             return
+
+        logger.debug("Logging stderr from subprocess")
 
         try:
             import re
@@ -421,6 +396,7 @@ class PlaywrightProcessManager:
             while True:
                 line = await self.process.stderr.readline()
                 if not line:
+                    logger.debug("No more stderr output from subprocess")
                     break
 
                 # Decode and log stderr output
@@ -441,22 +417,29 @@ class PlaywrightProcessManager:
         except Exception as e:
             logger.error(f"Error in stderr logger: {e}")
 
-    async def _build_command(self, config: PlaywrightConfig, npx_path: str) -> list[str]:
+    async def _build_command(self, config: PlaywrightConfig, npx_command_parts: list[str], playwright_host: str) -> list[str]:
         """
         Build the npx command with arguments from config.
 
         Args:
             config: Playwright configuration
-            npx_path: Absolute path to npx executable
+            npx_command_parts: List of command parts (e.g., ["cmd.exe", "/c", "npx.cmd"] or ["npx"])
+            playwright_host: Host IP for the upstream server to bind to (e.g., "0.0.0.0" for WSL mode, "127.0.0.1" for standard)
 
         Returns:
             List of command and arguments
         """
-        # Use the explicit npx path to ensure we use the correct Node.js installation
-        command = [npx_path, "@playwright/mcp@latest"]
+        # Start with the npx command parts (already resolved)
+        command = npx_command_parts.copy()
+
+        # Add the playwright package
+        command.append("@playwright/mcp@latest")
+        #command.append("@executeautomation/playwright-mcp-server")
 
         # HTTP transport configuration (REQUIRED for proxy to connect)
-        command.extend(["--host", PLAYWRIGHT_HTTP_HOST])
+        # In WSL mode, bind to the Windows host IP so WSL can access it
+        # In standard mode, bind to 127.0.0.1 for localhost only
+        command.extend(["--host", playwright_host])
         command.extend(["--port", str(PLAYWRIGHT_HTTP_PORT)])
         command.extend(["--allowed-hosts", "*"])  # Disable DNS rebinding check for localhost
 
@@ -547,5 +530,8 @@ class PlaywrightProcessManager:
         # Extension support
         if "extension" in config and config["extension"]:
             command.append("--extension")
-
+            
+        if "shared_browser_context" in config and config["shared_browser_context"]:
+            command.append("--shared-browser-context")
+            
         return command

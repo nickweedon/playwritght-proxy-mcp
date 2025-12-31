@@ -209,7 +209,7 @@ screenshot = await browser_take_screenshot(fullPage=True)
 
 Check if the script file exists:
 ```bash
-ls -la /opt/src/mcp/playwritght-proxy-mcp/src/playwright_proxy_mcp/playwright/stealth.js
+ls -la /opt/src/mcp/playwright-proxy-mcp/src/playwright_proxy_mcp/playwright/stealth.js
 ```
 
 ### Still Being Detected

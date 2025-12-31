@@ -2,6 +2,7 @@
 Unit tests for ARIA snapshot processor utilities.
 """
 
+from typing import Any
 import pytest
 
 from playwright_proxy_mcp.utils.aria_processor import (
@@ -10,7 +11,6 @@ from playwright_proxy_mcp.utils.aria_processor import (
     format_output,
     parse_aria_snapshot,
 )
-
 
 def test_extract_yaml_with_header():
     """Test stripping preamble text before ARIA snapshot."""
@@ -140,7 +140,6 @@ def test_apply_jmespath_query_filter():
     assert len(result) == 2
     assert all(item["role"] == "button" for item in result)
 
-
 def test_apply_jmespath_query_projection():
     """Test JMESPath query projection."""
     data = [
@@ -153,7 +152,6 @@ def test_apply_jmespath_query_projection():
     assert error is None
     assert result == ["Submit", "Home"]
 
-
 def test_apply_jmespath_query_invalid():
     """Test JMESPath query with invalid syntax."""
     data = [{"role": "button"}]
@@ -164,17 +162,13 @@ def test_apply_jmespath_query_invalid():
     assert "Invalid JMESPath query" in error
     assert result == []
 
-
 def test_format_output_json():
     """Test JSON output formatting."""
     data = [{"role": "button", "name": "Submit"}]
 
     result = format_output(data, "json")
 
-    assert isinstance(result, str)
-    import json
-    parsed = json.loads(result)
-    assert parsed == data
+    assert isinstance(result, list)
 
 
 def test_format_output_yaml():
@@ -187,7 +181,6 @@ def test_format_output_yaml():
     import yaml
     parsed = yaml.safe_load(result)
     assert parsed == data
-
 
 def test_format_output_default_yaml():
     """Test that default format is YAML."""

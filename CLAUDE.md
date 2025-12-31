@@ -6,6 +6,10 @@ This document provides context and guidelines for Claude when working with this 
 
 This is a proxy server for Microsoft's playwright-mcp built with Python and FastMCP. It provides efficient handling of large binary data (screenshots, PDFs) by storing them as blobs and returning blob:// URIs. All blob retrieval is delegated to a separate MCP Resource Server, following mcp_mapped_resource_lib best practices.
 
+## Reasearch, Investigating and Bug Fixing
+
+When an issue may possibly have anything to do with the upstream Playwright MCP Server, perform web searches to look for know issues and/or documentation.
+
 ## Blob Storage Architecture
 
 This proxy server follows mcp_mapped_resource_lib best practices:
@@ -891,6 +895,55 @@ Configure in `.env`:
 - `API_BASE_URL`: Base URL for API requests
 - `API_TIMEOUT`: Request timeout in seconds
 - `DEBUG`: Enable debug logging
+
+### WSL -> Windows Host Connection
+
+#### PLAYWRIGHT_WSL_HOST_CONNECT
+
+Enable WSL->Windows mode by specifying the Windows host IP address. This automatically configures the proxy to use Windows Node.js from WSL and connect to the Windows host.
+
+**Finding your Windows host IP from WSL**:
+```bash
+ip route show | grep -i default | awk '{ print $3}'
+# Common values: 172.22.96.1, 172.18.0.1, etc.
+```
+
+**When PLAYWRIGHT_WSL_HOST_CONNECT is set** (e.g., `"172.22.96.1"`):
+1. **NPX Command**: Automatically uses `cmd.exe /c npx.cmd` to execute Windows Node.js
+2. **Server Binding**: Upstream server binds to the specified Windows host IP
+3. **Client Connection**: Proxy connects to the specified Windows host IP
+4. **Health Checks**: All HTTP requests use the Windows host IP
+
+**When PLAYWRIGHT_WSL_HOST_CONNECT is NOT set** (standard mode):
+1. **NPX Command**: Uses `npx` from PATH (native Linux/WSL Node.js)
+2. **Server Binding**: Upstream server binds to `127.0.0.1` (localhost only)
+3. **Client Connection**: Proxy connects to `127.0.0.1`
+4. **Health Checks**: All HTTP requests use localhost
+
+**Example configuration**:
+
+```bash
+# WSL->Windows mode
+export PLAYWRIGHT_WSL_HOST_CONNECT=172.22.96.1
+```
+
+**Error handling**:
+
+If `PLAYWRIGHT_WSL_HOST_CONNECT` is set but `cmd.exe` is not found:
+```
+RuntimeError: cmd.exe not found in PATH. When PLAYWRIGHT_WSL_HOST_CONNECT is set,
+cmd.exe must be available to execute Windows npx.cmd.
+```
+
+**Why this design**:
+
+This single environment variable completely configures WSL->Windows interoperability:
+- No need to manually specify npx.cmd or cmd.exe paths
+- No need to configure binding addresses separately
+- No need to specify connection hosts separately
+- One variable = complete WSL mode activation
+
+**Architecture note**: This approach solves the UNC path issue (Windows CMD complaining about WSL paths) by executing the Windows npx.cmd from its Windows directory, while allowing the WSL proxy to connect to it via the Windows host IP.
 
 ## Troubleshooting
 

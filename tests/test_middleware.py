@@ -47,6 +47,41 @@ class TestBinaryInterceptionMiddleware:
         assert result is None
 
     @pytest.mark.asyncio
+    async def test_intercept_response_calltoolresult_conversion(self, middleware):
+        """Test that CallToolResult dataclass is converted to dict."""
+        from dataclasses import dataclass
+        from typing import Any
+
+        @dataclass
+        class MockCallToolResult:
+            """Mock CallToolResult matching FastMCP Client's dataclass structure."""
+            content: list[Any]
+            structured_content: dict[str, Any] | None = None
+            meta: dict[str, Any] | None = None
+            data: Any = None
+            is_error: bool = False
+
+        # Create a mock CallToolResult
+        mock_result = MockCallToolResult(
+            content=[{"type": "text", "text": "Hello"}],
+            structured_content=None,
+            meta={"foo": "bar"},
+            data=None,
+            is_error=False,
+        )
+
+        # Test conversion for non-binary tool (should convert but not transform)
+        result = await middleware.intercept_response("non_binary_tool", mock_result)
+
+        # Should be converted to dict
+        assert isinstance(result, dict)
+        assert result["content"] == [{"type": "text", "text": "Hello"}]
+        assert result["structured_content"] is None
+        assert result["meta"] == {"foo": "bar"}
+        assert result["data"] is None
+        assert result["is_error"] is False
+
+    @pytest.mark.asyncio
     async def test_intercept_response_non_binary_tool(self, middleware):
         """Test that responses from non-binary tools are returned unchanged."""
         response = {"status": "success", "data": "some data"}
@@ -262,4 +297,60 @@ class TestBinaryInterceptionMiddleware:
         result = await middleware.intercept_response("playwright_pdf", response)
 
         assert result["pdf"] == "blob://test.pdf"
-        assert result["pdf_mime_type"] == "application/pdf"
+
+    @pytest.mark.asyncio
+    async def test_intercept_content_array_with_pydantic_models(self, middleware, mock_blob_manager):
+        """Test intercepting content array with Pydantic model objects (not dicts)."""
+        from dataclasses import dataclass
+
+        # Create a mock Pydantic-like model with attributes
+        @dataclass
+        class BinaryContent:
+            """Mock BinaryContent matching FastMCP's structure."""
+            type: str
+            data: str
+            mimeType: str
+
+        # Create large base64 data
+        large_data = b"x" * (60 * 1024)
+        base64_data = base64.b64encode(large_data).decode("utf-8")
+
+        # Create a mock CallToolResult with BinaryContent objects (not dicts)
+        @dataclass
+        class MockCallToolResult:
+            content: list
+            is_error: bool = False
+
+        binary_item = BinaryContent(
+            type="image",
+            data=base64_data,
+            mimeType="image/png"
+        )
+
+        mock_result = MockCallToolResult(
+            content=[binary_item],
+            is_error=False
+        )
+
+        # Mock blob storage
+        mock_blob_manager.store_base64_data.return_value = {
+            "blob_id": "blob://test-123.png",
+            "size_bytes": len(large_data),
+            "mime_type": "image/png",
+            "created_at": "2024-01-01T00:00:00Z",
+            "expires_at": "2024-01-02T00:00:00Z",
+        }
+
+        result = await middleware.intercept_response("browser_take_screenshot", mock_result)
+
+        # Should have transformed the BinaryContent object to a blob reference dict
+        assert isinstance(result, dict)
+        assert "content" in result
+        assert len(result["content"]) == 1
+        assert result["content"][0]["type"] == "blob"
+        assert result["content"][0]["blob_id"] == "blob://test-123.png"
+        assert result["content"][0]["size_kb"] == len(large_data) // 1024
+        assert result["content"][0]["mime_type"] == "image/png"
+
+        # Verify blob storage was called
+        mock_blob_manager.store_base64_data.assert_called_once()

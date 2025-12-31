@@ -6,6 +6,9 @@ This module provides shared fixtures for all tests.
 
 import pytest
 
+# Import browser fixtures to make them available to all tests
+from tests.fixtures.browser_fixture import browser_setup  # noqa: F401
+
 
 @pytest.fixture
 def sample_item() -> dict:

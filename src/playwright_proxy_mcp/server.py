@@ -11,6 +11,7 @@ This server:
 4. Returns blob:// URIs for large binary data (retrieval delegated to MCP Resource Server)
 """
 
+import logging
 from contextlib import asynccontextmanager
 from typing import Any
 
@@ -25,11 +26,17 @@ from .playwright import (
     load_blob_config,
     load_playwright_config,
 )
-from .utils.logging_config import get_logger, setup_file_logging
+from .utils.logging_config import get_logger, log_tool_result, setup_file_logging
 
 # Configure logging using centralized utility
 setup_file_logging(log_file="logs/playwright-proxy-mcp.log")
 logger = get_logger(__name__)
+
+# Log Python interpreter information at startup
+import sys
+
+logger.info(f"Python interpreter: {sys.executable}")
+logger.info(f"Python version: {sys.version}")
 
 # Global components
 playwright_config = None
@@ -130,8 +137,13 @@ mcp = FastMCP(
 )
 
 # Register MCP request/response logging middleware
-# Logs all client MCP requests with "CLIENT_MCP" prefix for easy filtering
-mcp.add_middleware(MCPLoggingMiddleware(log_request_params=True, log_response_data=False))
+# Logs all client MCP requests and responses with "CLIENT_MCP" prefix for easy filtering
+# log_request_params=True: Log all tool parameters (at INFO level)
+# log_response_data=True: Log all tool responses (at INFO level)
+# max_log_length=10000: Log up to 10KB of data before truncation (full details)
+mcp.add_middleware(
+    MCPLoggingMiddleware(log_request_params=True, log_response_data=True, max_log_length=10000)
+)
 
 
 # =============================================================================
@@ -169,6 +181,7 @@ async def _call_playwright_tool(tool_name: str, arguments: dict[str, Any]) -> An
 
 
 @mcp.tool()
+@log_tool_result(logger)
 async def browser_navigate(
     url: str,
     silent_mode: bool = False,
@@ -241,8 +254,17 @@ async def browser_navigate(
 
         output_format: Format for snapshot output. Must be 'json' or 'yaml'. Default: 'yaml'
         cache_key: Reuse cached snapshot from previous navigation. Omit for fresh fetch. Default: None
-        offset: Starting index for pagination (used with cache_key). Default: 0
-        limit: Maximum items to return in paginated results (1-10000). Default: 1000
+        offset: Starting index for pagination. REQUIRES jmespath_query or cache_key. Default: 0
+        limit: Maximum items to return in paginated results (1-10000). REQUIRES jmespath_query or cache_key. Default: 1000
+
+            CRITICAL: Pagination (offset/limit) only works with JMESPath queries because ARIA
+            snapshots are single hierarchical tree structures. Without a query, there is only
+            one root element to return (not a list). You must use jmespath_query to transform
+            the tree into a list before pagination can be applied.
+
+            Example workflow:
+            1. First call with query: browser_navigate(url="...", jmespath_query="[].children[?role=='button']", limit=50)
+            2. Next page with cache: browser_navigate(url="...", cache_key="nav_abc123", offset=50, limit=50)
 
     Returns:
         NavigationResponse with navigation result and paginated snapshot.
@@ -332,6 +354,22 @@ async def browser_navigate(
             success=False,
             url=url,
             error="limit must be between 1 and 10000",
+            cache_key="",
+            total_items=0,
+            offset=offset,
+            limit=limit,
+            has_more=False,
+            snapshot=None,
+            output_format=output_format,
+        )
+
+    # Validate pagination requires JMESPath query
+    # ARIA snapshots without queries are single tree structures (not pageable)
+    if (offset > 0 or limit != 1000) and not jmespath_query and not cache_key:
+        return NavigationResponse(
+            success=False,
+            url=url,
+            error="Pagination (offset/limit) requires jmespath_query. ARIA snapshots are single tree structures without queries.",
             cache_key="",
             total_items=0,
             offset=offset,
@@ -502,6 +540,7 @@ async def browser_navigate(
 
 
 @mcp.tool()
+@log_tool_result(logger)
 async def browser_navigate_back() -> dict[str, Any]:
     """
     Go back to the previous page.
@@ -518,6 +557,7 @@ async def browser_navigate_back() -> dict[str, Any]:
 
 
 @mcp.tool()
+@log_tool_result(logger)
 async def browser_execute_bulk(
     commands: list[dict[str, Any]],
     stop_on_error: bool = True,
@@ -749,6 +789,7 @@ async def browser_execute_bulk(
 
 
 @mcp.tool()
+@log_tool_result(logger)
 async def browser_take_screenshot(
     type: str = "png",
     filename: str | None = None,
@@ -789,12 +830,21 @@ async def browser_take_screenshot(
     result = await _call_playwright_tool("browser_take_screenshot", args)
 
     # Extract blob URI from transformed response
-    if isinstance(result, dict) and "content" in result:
-        content = result["content"]
-        if isinstance(content, list):
-            for item in content:
-                if isinstance(item, dict) and item.get("type") == "blob":
-                    return item["blob_id"]
+    # Handle both dict and object (Pydantic model) responses
+    content = None
+    if isinstance(result, dict):
+        content = result.get("content")
+    elif hasattr(result, "content"):
+        content = result.content
+
+    if content and isinstance(content, list):
+        for item in content:
+            # Handle both dict and object (Pydantic model) items
+            item_type = item.get("type") if isinstance(item, dict) else getattr(item, "type", None)
+            if item_type == "blob":
+                blob_id = item.get("blob_id") if isinstance(item, dict) else getattr(item, "blob_id", None)
+                if blob_id:
+                    return blob_id
 
     # Fallback: if result is already a string, return it
     if isinstance(result, str):
@@ -804,6 +854,7 @@ async def browser_take_screenshot(
 
 
 @mcp.tool()
+@log_tool_result(logger)
 async def browser_pdf_save(filename: str | None = None) -> str:
     """
     Save page as PDF.
@@ -825,12 +876,21 @@ async def browser_pdf_save(filename: str | None = None) -> str:
     result = await _call_playwright_tool("browser_pdf_save", args)
 
     # Extract blob URI from transformed response
-    if isinstance(result, dict) and "content" in result:
-        content = result["content"]
-        if isinstance(content, list):
-            for item in content:
-                if isinstance(item, dict) and item.get("type") == "blob":
-                    return item["blob_id"]
+    # Handle both dict and object (Pydantic model) responses
+    content = None
+    if isinstance(result, dict):
+        content = result.get("content")
+    elif hasattr(result, "content"):
+        content = result.content
+
+    if content and isinstance(content, list):
+        for item in content:
+            # Handle both dict and object (Pydantic model) items
+            item_type = item.get("type") if isinstance(item, dict) else getattr(item, "type", None)
+            if item_type == "blob":
+                blob_id = item.get("blob_id") if isinstance(item, dict) else getattr(item, "blob_id", None)
+                if blob_id:
+                    return blob_id
 
     # Fallback: if result is already a string, return it
     if isinstance(result, str):
@@ -845,6 +905,7 @@ async def browser_pdf_save(filename: str | None = None) -> str:
 
 
 @mcp.tool()
+@log_tool_result(logger)
 async def browser_run_code(code: str) -> dict[str, Any]:
     """
     Run Playwright code snippet.
@@ -861,6 +922,7 @@ async def browser_run_code(code: str) -> dict[str, Any]:
 
 
 @mcp.tool()
+@log_tool_result(logger)
 async def browser_evaluate(
     function: str,
     element: str | None = None,
@@ -892,6 +954,7 @@ async def browser_evaluate(
 
 
 @mcp.tool()
+@log_tool_result(logger)
 async def browser_snapshot(
     filename: str | None = None,
     silent_mode: bool = False,
@@ -965,8 +1028,17 @@ async def browser_snapshot(
 
         output_format: Format for snapshot output. Must be 'json' or 'yaml'. Default: 'yaml'
         cache_key: Reuse cached snapshot from previous call. Omit for fresh fetch. Default: None
-        offset: Starting index for pagination (used with cache_key). Default: 0
-        limit: Maximum items to return in paginated results (1-10000). Default: 1000
+        offset: Starting index for pagination. REQUIRES jmespath_query or cache_key. Default: 0
+        limit: Maximum items to return in paginated results (1-10000). REQUIRES jmespath_query or cache_key. Default: 1000
+
+            CRITICAL: Pagination (offset/limit) only works with JMESPath queries because ARIA
+            snapshots are single hierarchical tree structures. Without a query, there is only
+            one root element to return (not a list). You must use jmespath_query to transform
+            the tree into a list before pagination can be applied.
+
+            Example workflow:
+            1. First call with query: browser_snapshot(jmespath_query="[].children[?role=='button']", limit=50)
+            2. Next page with cache: browser_snapshot(cache_key="nav_abc123", offset=50, limit=50)
 
     Returns:
         NavigationResponse with snapshot result and paginated data (or file save confirmation).
@@ -1050,6 +1122,22 @@ async def browser_snapshot(
             success=False,
             url="",
             error="limit must be between 1 and 10000",
+            cache_key="",
+            total_items=0,
+            offset=offset,
+            limit=limit,
+            has_more=False,
+            snapshot=None,
+            output_format=output_format,
+        )
+
+    # Validate pagination requires JMESPath query
+    # ARIA snapshots without queries are single tree structures (not pageable)
+    if (offset > 0 or limit != 1000) and not jmespath_query and not cache_key:
+        return NavigationResponse(
+            success=False,
+            url="",
+            error="Pagination (offset/limit) requires jmespath_query. ARIA snapshots are single tree structures without queries.",
             cache_key="",
             total_items=0,
             offset=offset,
@@ -1220,6 +1308,7 @@ async def browser_snapshot(
 
 
 @mcp.tool()
+@log_tool_result(logger)
 async def browser_click(
     element: str,
     ref: str,
@@ -1252,6 +1341,7 @@ async def browser_click(
 
 
 @mcp.tool()
+@log_tool_result(logger)
 async def browser_drag(
     startElement: str,
     startRef: str,
@@ -1282,6 +1372,7 @@ async def browser_drag(
 
 
 @mcp.tool()
+@log_tool_result(logger)
 async def browser_hover(element: str, ref: str) -> dict[str, Any]:
     """
     Hover over element on page.
@@ -1297,6 +1388,7 @@ async def browser_hover(element: str, ref: str) -> dict[str, Any]:
 
 
 @mcp.tool()
+@log_tool_result(logger)
 async def browser_select_option(element: str, ref: str, values: list[str]) -> dict[str, Any]:
     """
     Select an option in a dropdown.
@@ -1315,6 +1407,7 @@ async def browser_select_option(element: str, ref: str, values: list[str]) -> di
 
 
 @mcp.tool()
+@log_tool_result(logger)
 async def browser_generate_locator(element: str, ref: str) -> dict[str, Any]:
     """
     Generate locator for the given element to use in tests.
@@ -1335,6 +1428,7 @@ async def browser_generate_locator(element: str, ref: str) -> dict[str, Any]:
 
 
 @mcp.tool()
+@log_tool_result(logger)
 async def browser_fill_form(fields: list[dict[str, Any]]) -> dict[str, Any]:
     """
     Fill multiple form fields.
@@ -1359,6 +1453,7 @@ async def browser_fill_form(fields: list[dict[str, Any]]) -> dict[str, Any]:
 
 
 @mcp.tool()
+@log_tool_result(logger)
 async def browser_mouse_move_xy(element: str, x: float, y: float) -> dict[str, Any]:
     """
     Move mouse to a given position.
@@ -1377,6 +1472,7 @@ async def browser_mouse_move_xy(element: str, x: float, y: float) -> dict[str, A
 
 
 @mcp.tool()
+@log_tool_result(logger)
 async def browser_mouse_click_xy(element: str, x: float, y: float) -> dict[str, Any]:
     """
     Click left mouse button at a given position.
@@ -1395,6 +1491,7 @@ async def browser_mouse_click_xy(element: str, x: float, y: float) -> dict[str, 
 
 
 @mcp.tool()
+@log_tool_result(logger)
 async def browser_mouse_drag_xy(
     element: str,
     startX: float,
@@ -1433,6 +1530,7 @@ async def browser_mouse_drag_xy(
 
 
 @mcp.tool()
+@log_tool_result(logger)
 async def browser_press_key(key: str) -> dict[str, Any]:
     """
     Press a key on the keyboard.
@@ -1447,6 +1545,7 @@ async def browser_press_key(key: str) -> dict[str, Any]:
 
 
 @mcp.tool()
+@log_tool_result(logger)
 async def browser_type(
     element: str,
     ref: str,
@@ -1483,6 +1582,7 @@ async def browser_type(
 
 
 @mcp.tool()
+@log_tool_result(logger)
 async def browser_wait_for(
     time: float | None = None,
     text: str | None = None,
@@ -1516,6 +1616,7 @@ async def browser_wait_for(
 
 
 @mcp.tool()
+@log_tool_result(logger)
 async def browser_verify_element_visible(role: str, accessibleName: str) -> dict[str, Any]:
     """
     Verify element is visible on the page.
@@ -1533,6 +1634,7 @@ async def browser_verify_element_visible(role: str, accessibleName: str) -> dict
 
 
 @mcp.tool()
+@log_tool_result(logger)
 async def browser_verify_text_visible(text: str) -> dict[str, Any]:
     """
     Verify text is visible on the page. Prefer browser_verify_element_visible if possible.
@@ -1547,6 +1649,7 @@ async def browser_verify_text_visible(text: str) -> dict[str, Any]:
 
 
 @mcp.tool()
+@log_tool_result(logger)
 async def browser_verify_list_visible(element: str, ref: str, items: list[str]) -> dict[str, Any]:
     """
     Verify list is visible on the page.
@@ -1565,6 +1668,7 @@ async def browser_verify_list_visible(element: str, ref: str, items: list[str]) 
 
 
 @mcp.tool()
+@log_tool_result(logger)
 async def browser_verify_value(type: str, element: str, ref: str, value: str) -> dict[str, Any]:
     """
     Verify element value.
@@ -1589,6 +1693,7 @@ async def browser_verify_value(type: str, element: str, ref: str, value: str) ->
 
 
 @mcp.tool()
+@log_tool_result(logger)
 async def browser_network_requests(includeStatic: bool = False) -> dict[str, Any]:
     """
     Returns all network requests since loading the page.
@@ -1608,6 +1713,7 @@ async def browser_network_requests(includeStatic: bool = False) -> dict[str, Any
 
 
 @mcp.tool()
+@log_tool_result(logger)
 async def browser_tabs(action: str, index: int | None = None) -> dict[str, Any]:
     """
     List, create, close, or select a browser tab.
@@ -1632,6 +1738,7 @@ async def browser_tabs(action: str, index: int | None = None) -> dict[str, Any]:
 
 
 @mcp.tool()
+@log_tool_result(logger)
 async def browser_console_messages(level: str = "info") -> dict[str, Any]:
     """
     Returns all console messages.
@@ -1652,6 +1759,7 @@ async def browser_console_messages(level: str = "info") -> dict[str, Any]:
 
 
 @mcp.tool()
+@log_tool_result(logger)
 async def browser_handle_dialog(accept: bool, promptText: str | None = None) -> dict[str, Any]:
     """
     Handle a dialog.
@@ -1676,6 +1784,7 @@ async def browser_handle_dialog(accept: bool, promptText: str | None = None) -> 
 
 
 @mcp.tool()
+@log_tool_result(logger)
 async def browser_file_upload(paths: list[str] | None = None) -> dict[str, Any]:
     """
     Upload one or multiple files.
@@ -1700,6 +1809,7 @@ async def browser_file_upload(paths: list[str] | None = None) -> dict[str, Any]:
 
 
 @mcp.tool()
+@log_tool_result(logger)
 async def browser_start_tracing() -> dict[str, Any]:
     """
     Start trace recording.
@@ -1711,6 +1821,7 @@ async def browser_start_tracing() -> dict[str, Any]:
 
 
 @mcp.tool()
+@log_tool_result(logger)
 async def browser_stop_tracing() -> dict[str, Any]:
     """
     Stop trace recording.
@@ -1727,6 +1838,7 @@ async def browser_stop_tracing() -> dict[str, Any]:
 
 
 @mcp.tool()
+@log_tool_result(logger)
 async def browser_install() -> dict[str, Any]:
     """
     Install the browser specified in the config. Call this if you get an error about the browser not being installed.

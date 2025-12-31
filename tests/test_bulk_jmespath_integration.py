@@ -104,7 +104,7 @@ async def test_bulk_snapshot_with_jmespath():
 
 @pytest.mark.asyncio
 async def test_bulk_navigate_with_pagination():
-    """Test bulk execution handles pagination through browser_navigate wrapper."""
+    """Test bulk execution handles pagination through browser_navigate wrapper with JMESPath query."""
     mock_page1 = {
         "success": True,
         "url": "https://example.com",
@@ -115,7 +115,7 @@ async def test_bulk_navigate_with_pagination():
         "has_more": True,
         "snapshot": "...",
         "error": None,
-        "query_applied": None,
+        "query_applied": "[?role == `button`]",
         "output_format": "json"
     }
 
@@ -140,12 +140,21 @@ async def test_bulk_navigate_with_pagination():
             commands=[
                 {
                     "tool": "browser_navigate",
-                    "args": {"url": "https://example.com", "limit": 50},
+                    "args": {
+                        "url": "https://example.com",
+                        "jmespath_query": "[?role == `button`]",  # Required for pagination
+                        "limit": 50
+                    },
                     "return_result": True
                 },
                 {
                     "tool": "browser_navigate",
-                    "args": {"url": "https://example.com", "cache_key": "nav_789", "offset": 50, "limit": 50},
+                    "args": {
+                        "url": "https://example.com",
+                        "cache_key": "nav_789",  # Cache key allows pagination without query
+                        "offset": 50,
+                        "limit": 50
+                    },
                     "return_result": True
                 }
             ]

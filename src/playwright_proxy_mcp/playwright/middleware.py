@@ -59,23 +59,51 @@ class BinaryInterceptionMiddleware:
 
         Args:
             tool_name: Name of the tool that was called
-            response: The response from the tool
+            response: The response from the tool (CallToolResult dataclass)
 
         Returns:
-            Potentially transformed response
+            Potentially transformed response as dict
         """
-        # Only process dict responses
-        if not isinstance(response, dict):
+        # Convert CallToolResult dataclass to dict for processing
+        # FastMCP Client returns a dataclass with fields: content, structured_content, meta, data, is_error
+        if hasattr(response, 'content'):
+            # This is a CallToolResult dataclass
+            response_dict = {
+                'content': response.content,
+                'structured_content': getattr(response, 'structured_content', None),
+                'meta': getattr(response, 'meta', None),
+                'data': getattr(response, 'data', None),
+                'is_error': getattr(response, 'is_error', False),
+            }
+        elif isinstance(response, dict):
+            # Already a dict
+            response_dict = response
+        else:
+            # Unknown format, return as-is
             return response
+
+        # Always convert content items to dictionaries
+        # (FastMCP Client returns Pydantic models/dataclasses that need conversion)
+        if 'content' in response_dict and isinstance(response_dict['content'], list):
+            converted_content = []
+            for item in response_dict['content']:
+                if isinstance(item, dict):
+                    converted_content.append(item)
+                elif hasattr(item, '__dict__'):
+                    # Convert object to dict
+                    converted_content.append(self._object_to_dict(item))
+                else:
+                    converted_content.append(item)
+            response_dict['content'] = converted_content
 
         # Check if this tool produces binary data
         should_check = tool_name in self.BINARY_TOOLS or tool_name in self.CONDITIONAL_BINARY_TOOLS
 
         if not should_check:
-            return response
+            return response_dict
 
         # Look for base64 data in the response
-        transformed = await self._transform_response_data(response, tool_name)
+        transformed = await self._transform_response_data(response_dict, tool_name)
 
         return transformed
 
@@ -145,12 +173,20 @@ class BinaryInterceptionMiddleware:
         result = []
 
         for item in items:
-            if isinstance(item, dict):
+            # Handle both dict and Pydantic model (with attributes)
+            is_dict = isinstance(item, dict)
+            is_object = not is_dict and hasattr(item, "__dict__")
+
+            if is_dict or is_object:
+                # Extract type and data fields (handle both dict and object access)
+                item_type = item.get("type") if is_dict else getattr(item, "type", None)
+                has_data = "data" in item if is_dict else hasattr(item, "data")
+
                 # Check if this is an image/binary content item
-                if item.get("type") in ("image", "resource") and "data" in item:
+                if item_type in ("image", "resource") and has_data:
                     # Transform image/binary data to blob
-                    data = item["data"]
-                    mime_type = item.get("mimeType", "application/octet-stream")
+                    data = item["data"] if is_dict else item.data
+                    mime_type = item.get("mimeType", "application/octet-stream") if is_dict else getattr(item, "mimeType", "application/octet-stream")
 
                     # Check if data should be stored as blob
                     if await self._should_store_as_blob(data):
@@ -178,9 +214,14 @@ class BinaryInterceptionMiddleware:
                         })
                     else:
                         result.append(item)
-                else:
+                elif is_dict:
                     # Recursively transform nested dicts
                     result.append(await self._transform_response_data(item, tool_name))
+                else:
+                    # Object but not binary content, convert to dict
+                    # Convert dataclass/Pydantic object to dict
+                    item_dict = self._object_to_dict(item)
+                    result.append(item_dict)
             else:
                 result.append(item)
 
@@ -289,3 +330,48 @@ class BinaryInterceptionMiddleware:
         }
 
         return mime_to_ext.get(mime_type, ".bin")
+
+    def _object_to_dict(self, obj: Any) -> dict[str, Any]:
+        """
+        Convert a dataclass or Pydantic object to a dictionary.
+
+        Args:
+            obj: Object to convert
+
+        Returns:
+            Dictionary representation of the object
+        """
+        # Try dataclasses.asdict first (for dataclass objects)
+        try:
+            from dataclasses import asdict, is_dataclass
+            if is_dataclass(obj):
+                return asdict(obj)
+        except (ImportError, TypeError):
+            pass
+
+        # Try Pydantic model_dump (for Pydantic v2 models)
+        if hasattr(obj, "model_dump"):
+            try:
+                return obj.model_dump()
+            except Exception:
+                pass
+
+        # Try Pydantic dict() (for Pydantic v1 models)
+        if hasattr(obj, "dict") and callable(obj.dict):
+            try:
+                return obj.dict()
+            except Exception:
+                pass
+
+        # Fallback: manually convert using __dict__
+        if hasattr(obj, "__dict__"):
+            result = {}
+            for key, value in obj.__dict__.items():
+                # Skip private attributes
+                if key.startswith("_"):
+                    continue
+                result[key] = value
+            return result
+
+        # Last resort: return object as-is wrapped in a dict
+        return {"value": obj}

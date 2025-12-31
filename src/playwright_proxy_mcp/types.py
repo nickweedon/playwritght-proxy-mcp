@@ -4,7 +4,7 @@ Type Definitions
 Define TypedDict classes for playwright proxy and blob storage data structures.
 """
 
-from typing import TypedDict
+from typing import Any, TypedDict
 
 
 class BlobReference(TypedDict, total=False):
@@ -61,7 +61,7 @@ class NavigationResponse(TypedDict, total=False):
     offset: int
     limit: int
     has_more: bool
-    snapshot: str | None
+    snapshot: str | None | dict[str, Any]
     error: str | None
     output_format: str
 

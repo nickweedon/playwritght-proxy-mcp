@@ -145,18 +145,18 @@ def apply_jmespath_query(data: Any, expression: str) -> tuple[Any, str | None]:
         return ([], f"Invalid JMESPath query: {e}")
 
 
-def format_output(data: Any, output_format: str) -> str:
+def format_output(data: dict[str, Any], output_format: str) -> str | list[dict[str, Any]]:
     """
-    Format data as JSON or YAML.
+    Format data as JSON (raw) or YAML.
 
     Args:
         data: Data to format
         output_format: 'json' or 'yaml'
 
     Returns:
-        Formatted string
+        Formatted string or raw data
     """
-    if output_format.lower() == "yaml":
+    if output_format.lower() == "json":
+        return data
+    else:  # yaml (default)
         return yaml.dump(data, default_flow_style=False, allow_unicode=True)
-    else:  # json
-        return json.dumps(data, indent=2, ensure_ascii=False)

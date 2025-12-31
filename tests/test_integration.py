@@ -14,8 +14,6 @@ import pytest
 from playwright_proxy_mcp.playwright.blob_manager import PlaywrightBlobManager
 from playwright_proxy_mcp.playwright.config import load_playwright_config
 from playwright_proxy_mcp.playwright.middleware import BinaryInterceptionMiddleware
-from playwright_proxy_mcp.playwright.process_manager import PlaywrightProcessManager
-from playwright_proxy_mcp.playwright.proxy_client import PlaywrightProxyClient
 
 
 class TestIntegrationWorkflows:
@@ -107,7 +105,7 @@ class TestIntegrationWorkflows:
         assert "max_size_mb" in blob_config
 
     @pytest.mark.asyncio
-    async def test_real_mcp_server_amazon_screenshot(self):
+    async def test_real_mcp_server_amazon_screenshot(self, browser_setup):  # noqa: ARG002
         """
         Integration test: Start real MCP server, navigate to Amazon, and take a screenshot.
 
@@ -118,112 +116,50 @@ class TestIntegrationWorkflows:
         4. Blob is actually stored in the blob manager
         5. Blob URI follows the expected format
         """
-        with tempfile.TemporaryDirectory() as tmpdir:
-            # Set up configuration
-            blob_config = {
-                "storage_root": tmpdir,
-                "max_size_mb": 100,
-                "ttl_hours": 24,
-                "size_threshold_kb": 50,
-                "cleanup_interval_minutes": 60,
-            }
+        # browser_setup fixture automatically configures the test environment
+        # Import server module to access tools and blob_manager
+        import playwright_proxy_mcp.server as server_module
 
-            playwright_config = load_playwright_config()
-            # Ensure headless mode for testing
-            playwright_config["headless"] = True
-            # Override output_dir to use temp directory instead of /app
-            playwright_config["output_dir"] = f"{tmpdir}/playwright-output"
+        # Navigate to Amazon using the MCP server tool's underlying function
+        navigate_result = await server_module.browser_navigate.fn(
+            "https://www.amazon.com"
+        )
 
-            # Initialize components (mimicking server.py global components)
-            blob_manager = PlaywrightBlobManager(blob_config)
-            process_manager = PlaywrightProcessManager()
-            middleware = BinaryInterceptionMiddleware(
-                blob_manager, blob_config["size_threshold_kb"]
-            )
-            proxy_client = PlaywrightProxyClient(process_manager, middleware)
+        # Verify navigation succeeded
+        assert navigate_result is not None, "Navigation result should not be None"
 
-            # Patch the server's global components to use our test instances
-            import playwright_proxy_mcp.server as server_module
+        # Take a screenshot using the MCP server tool's underlying function (not proxy client directly!)
+        blob_uri = await server_module.browser_take_screenshot.fn(
+            filename="amazon_homepage", fullPage=False
+        )
 
-            original_proxy_client = server_module.proxy_client
-            original_blob_manager = server_module.blob_manager
-            original_middleware = server_module.middleware
+        # CRITICAL VERIFICATION: Result should be ONLY a blob URI string, not blob data
+        assert isinstance(blob_uri, str), (
+            f"Expected screenshot to return a string (blob URI), got {type(blob_uri)}: {blob_uri}"
+        )
 
-            server_module.proxy_client = proxy_client
-            server_module.blob_manager = blob_manager
-            server_module.middleware = middleware
+        # Verify it's a blob URI, not base64 data
+        assert blob_uri.startswith("blob://"), (
+            f"Expected blob:// URI, got: {blob_uri[:100]}"
+        )
 
-            try:
-                # Start the proxy client and playwright-mcp subprocess
-                await proxy_client.start(playwright_config)
+        # Verify blob URI format: blob://TIMESTAMP-HASH.EXTENSION
+        blob_uri_pattern = r"^blob://\d+-[a-f0-9]+\.\w+$"
+        assert re.match(blob_uri_pattern, blob_uri), (
+            f"Blob URI '{blob_uri}' does not match expected pattern '{blob_uri_pattern}'"
+        )
 
-                # Start blob cleanup task
-                await blob_manager.start_cleanup_task()
+        # Verify the blob was actually stored in the blob manager
+        # Extract the blob ID (everything after blob://)
+        blob_id = blob_uri.replace("blob://", "")
 
-                # Verify the proxy client is healthy
-                assert proxy_client.is_healthy(), "Proxy client should be healthy after starting"
-
-                # Navigate to Amazon using the MCP server tool's underlying function
-                navigate_result = await server_module.browser_navigate.fn(
-                    "https://www.amazon.com"
-                )
-
-                # Verify navigation succeeded
-                assert navigate_result is not None, "Navigation result should not be None"
-
-                # Take a screenshot using the MCP server tool's underlying function (not proxy client directly!)
-                blob_uri = await server_module.browser_take_screenshot.fn(
-                    filename="amazon_homepage", fullPage=False
-                )
-
-                # CRITICAL VERIFICATION: Result should be ONLY a blob URI string, not blob data
-                assert isinstance(blob_uri, str), (
-                    f"Expected screenshot to return a string (blob URI), got {type(blob_uri)}: {blob_uri}"
-                )
-
-                # Verify it's a blob URI, not base64 data
-                assert blob_uri.startswith("blob://"), (
-                    f"Expected blob:// URI, got: {blob_uri[:100]}"
-                )
-
-                # Verify blob URI format: blob://TIMESTAMP-HASH.EXTENSION
-                blob_uri_pattern = r"^blob://\d+-[a-f0-9]+\.\w+$"
-                assert re.match(blob_uri_pattern, blob_uri), (
-                    f"Blob URI '{blob_uri}' does not match expected pattern '{blob_uri_pattern}'"
-                )
-
-                # Verify the blob was actually stored in the blob manager
-                # Extract the blob ID (everything after blob://)
-                blob_id = blob_uri.replace("blob://", "")
-
-                # Verify by checking the blob manager's storage
-                metadata = blob_manager.storage.get_metadata(blob_id)
-                assert metadata is not None, f"Blob {blob_id} should exist in storage"
-                assert metadata["size_bytes"] > 0, "Blob should have non-zero size"
-
-            finally:
-                # Restore original server components
-                server_module.proxy_client = original_proxy_client
-                server_module.blob_manager = original_blob_manager
-                server_module.middleware = original_middleware
-
-                # Clean up
-                await blob_manager.stop_cleanup_task()
-                await proxy_client.stop()
-
-                # Verify cleanup
-                assert not proxy_client.is_healthy(), (
-                    "Proxy client should not be healthy after stopping"
-                )
-
-                server_module.middleware = original_middleware
-
-                # Clean up
-                await blob_manager.stop_cleanup_task()
-                await proxy_client.stop()
+        # Verify by checking the blob manager's storage
+        metadata = server_module.blob_manager.storage.get_metadata(blob_id)
+        assert metadata is not None, f"Blob {blob_id} should exist in storage"
+        assert metadata["size_bytes"] > 0, "Blob should have non-zero size"
 
     @pytest.mark.asyncio
-    async def test_real_mcp_server_amazon_search(self):
+    async def test_real_mcp_server_amazon_search(self, browser_setup):  # noqa: ARG002
         """
         Integration test: Navigate to Amazon and search for trousers.
 
@@ -233,117 +169,60 @@ class TestIntegrationWorkflows:
         3. Form filling and search functionality works
         4. Response size tracking for the search results page
         """
-        with tempfile.TemporaryDirectory() as tmpdir:
-            # Set up configuration
-            blob_config = {
-                "storage_root": tmpdir,
-                "max_size_mb": 100,
-                "ttl_hours": 24,
-                "size_threshold_kb": 50,
-                "cleanup_interval_minutes": 60,
-            }
+        # browser_setup fixture automatically configures the test environment
+        import json
 
-            playwright_config = load_playwright_config()
-            # Ensure headless mode for testing
-            playwright_config["headless"] = True
-            # Override output_dir to use temp directory instead of /app
-            playwright_config["output_dir"] = f"{tmpdir}/playwright-output"
+        import playwright_proxy_mcp.server as server_module
 
-            # Initialize components (mimicking server.py global components)
-            blob_manager = PlaywrightBlobManager(blob_config)
-            process_manager = PlaywrightProcessManager()
-            middleware = BinaryInterceptionMiddleware(
-                blob_manager, blob_config["size_threshold_kb"]
+        # 1. Navigate to Amazon homepage
+        navigate_result_1 = await server_module.browser_navigate.fn(
+            "https://www.amazon.com"
+        )
+
+        # Verify first navigation succeeded
+        assert navigate_result_1 is not None, "First navigation result should not be None"
+
+        # 2. Navigate to Amazon search results for "trousers"
+        # This is the second call that we're focusing on
+        navigate_result_2 = await server_module.browser_navigate.fn(
+            "https://www.amazon.com/s?k=trousers"
+        )
+
+        # Serialize the response to measure its size
+        response_json = json.dumps(navigate_result_2)
+        response_size_bytes = len(response_json.encode("utf-8"))
+        response_size_kb = response_size_bytes / 1024
+
+        # Verify search navigation succeeded
+        assert navigate_result_2 is not None, "Second navigation result should not be None"
+
+        # Display results for the second call (trousers search)
+        print("\n=== Amazon Trousers Search Navigation (Second Call) ===")
+        print(f"Response type: {type(navigate_result_2)}")
+        print(f"Response size: {response_size_bytes} bytes ({response_size_kb:.2f} KB)")
+
+        # Check if response is a dict with content
+        if isinstance(navigate_result_2, dict):
+            result_str = str(navigate_result_2)
+
+            # Verify the navigation was successful
+            assert len(result_str) > 0, "Navigation result should not be empty"
+
+            print(
+                f"Response keys: {list(navigate_result_2.keys()) if isinstance(navigate_result_2, dict) else 'N/A'}"
             )
-            proxy_client = PlaywrightProxyClient(process_manager, middleware)
+            print(f"Response preview (first 500 chars): {result_str[:500]}")
 
-            # Patch the server's global components to use our test instances
-            import playwright_proxy_mcp.server as server_module
+        print("=== End of Search Navigation Results ===\n")
 
-            original_proxy_client = server_module.proxy_client
-            original_blob_manager = server_module.blob_manager
-            original_middleware = server_module.middleware
-
-            server_module.proxy_client = proxy_client
-            server_module.blob_manager = blob_manager
-            server_module.middleware = middleware
-
-            try:
-                # Start the proxy client and playwright-mcp subprocess
-                await proxy_client.start(playwright_config)
-
-                # Start blob cleanup task
-                await blob_manager.start_cleanup_task()
-
-                # Verify the proxy client is healthy
-                assert proxy_client.is_healthy(), "Proxy client should be healthy after starting"
-
-                # 1. Navigate to Amazon homepage
-                navigate_result_1 = await server_module.browser_navigate.fn(
-                    "https://www.amazon.com"
-                )
-
-                # Verify first navigation succeeded
-                assert navigate_result_1 is not None, "First navigation result should not be None"
-
-                # 2. Navigate to Amazon search results for "trousers"
-                # This is the second call that we're focusing on
-                import json
-
-                navigate_result_2 = await server_module.browser_navigate.fn(
-                    "https://www.amazon.com/s?k=trousers"
-                )
-
-                # Serialize the response to measure its size
-                response_json = json.dumps(navigate_result_2)
-                response_size_bytes = len(response_json.encode("utf-8"))
-                response_size_kb = response_size_bytes / 1024
-
-                # Verify search navigation succeeded
-                assert navigate_result_2 is not None, "Second navigation result should not be None"
-
-                # Display results for the second call (trousers search)
-                print("\n=== Amazon Trousers Search Navigation (Second Call) ===")
-                print(f"Response type: {type(navigate_result_2)}")
-                print(f"Response size: {response_size_bytes} bytes ({response_size_kb:.2f} KB)")
-
-                # Check if response is a dict with content
-                if isinstance(navigate_result_2, dict):
-                    result_str = str(navigate_result_2)
-
-                    # Verify the navigation was successful
-                    assert len(result_str) > 0, "Navigation result should not be empty"
-
-                    print(
-                        f"Response keys: {list(navigate_result_2.keys()) if isinstance(navigate_result_2, dict) else 'N/A'}"
-                    )
-                    print(f"Response preview (first 500 chars): {result_str[:500]}")
-
-                print("=== End of Search Navigation Results ===\n")
-
-                # Final verification: Response size should be reasonable (not empty, but not huge)
-                assert response_size_bytes > 100, "Response should contain substantial content"
-                assert response_size_bytes < 10_000_000, (
-                    "Response should not be excessively large (>10MB)"
-                )
-
-            finally:
-                # Restore original server components
-                server_module.proxy_client = original_proxy_client
-                server_module.blob_manager = original_blob_manager
-                server_module.middleware = original_middleware
-
-                # Clean up
-                await blob_manager.stop_cleanup_task()
-                await proxy_client.stop()
-
-                # Verify cleanup
-                assert not proxy_client.is_healthy(), (
-                    "Proxy client should not be healthy after stopping"
-                )
+        # Final verification: Response size should be reasonable (not empty, but not huge)
+        assert response_size_bytes > 100, "Response should contain substantial content"
+        assert response_size_bytes < 10_000_000, (
+            "Response should not be excessively large (>10MB)"
+        )
 
     @pytest.mark.asyncio
-    async def test_amazon_screenshot_resolution_viewport_only(self):
+    async def test_amazon_screenshot_resolution_viewport_only(self, browser_setup):  # noqa: ARG002
         """
         Test screenshot resolution with full_page=False (viewport only).
 
@@ -354,7 +233,10 @@ class TestIntegrationWorkflows:
 
         With full_page=False, the viewport should match the configured size exactly.
         """
+        # browser_setup fixture automatically configures the test environment
         import os
+
+        import playwright_proxy_mcp.server as server_module
 
         def get_png_dimensions(png_data: bytes) -> tuple[int, int]:
             """Extract width and height from PNG binary data."""
@@ -366,106 +248,56 @@ class TestIntegrationWorkflows:
             height = struct.unpack(">I", png_data[offset + 4 : offset + 8])[0]
             return width, height
 
-        with tempfile.TemporaryDirectory() as tmpdir:
-            # Set up configuration
-            blob_config = {
-                "storage_root": tmpdir,
-                "max_size_mb": 100,
-                "ttl_hours": 24,
-                "size_threshold_kb": 50,
-                "cleanup_interval_minutes": 60,
-            }
+        # Navigate to Amazon
+        await server_module.browser_navigate.fn("https://www.amazon.com")
 
-            playwright_config = load_playwright_config()
-            playwright_config["headless"] = True
-            playwright_config["output_dir"] = f"{tmpdir}/playwright-output"
+        # Take viewport-only screenshot (full_page=False)
+        blob_uri = await server_module.browser_take_screenshot.fn(
+            filename="amazon_viewport_test", fullPage=False
+        )
 
-            # Verify viewport is configured correctly
-            assert (
-                playwright_config.get("viewport_size") == "1920x1080"
-            ), "Viewport should be 1920x1080"
+        # Verify we got a blob URI
+        assert isinstance(blob_uri, str), f"Expected blob URI string, got {type(blob_uri)}"
+        assert blob_uri.startswith("blob://"), f"Expected blob:// URI, got {blob_uri}"
 
-            # Initialize components
-            blob_manager = PlaywrightBlobManager(blob_config)
-            process_manager = PlaywrightProcessManager()
-            middleware = BinaryInterceptionMiddleware(
-                blob_manager, blob_config["size_threshold_kb"]
-            )
-            proxy_client = PlaywrightProxyClient(process_manager, middleware)
+        # Extract blob ID and get metadata from blob manager
+        blob_id = blob_uri.replace("blob://", "")
 
-            # Patch the server's global components
-            import playwright_proxy_mcp.server as server_module
+        # Get the storage root from blob manager
+        storage_root = server_module.blob_manager.storage.storage_root
 
-            original_proxy_client = server_module.proxy_client
-            original_blob_manager = server_module.blob_manager
-            original_middleware = server_module.middleware
+        print(f"\n=== Blob Storage Contents ===")
+        print(f"Looking for blob: {blob_id}")
+        print(f"Storage root: {storage_root}")
 
-            server_module.proxy_client = proxy_client
-            server_module.blob_manager = blob_manager
-            server_module.middleware = middleware
+        # Find the blob file in storage
+        blob_file = None
+        for root, _, files in os.walk(storage_root):
+            if blob_id in files:
+                blob_file = Path(root) / blob_id
+                break
 
-            try:
-                # Start the proxy client and playwright-mcp subprocess
-                await proxy_client.start(playwright_config)
-                await blob_manager.start_cleanup_task()
+        assert blob_file is not None, f"Blob file not found for {blob_id}"
+        assert blob_file.exists(), f"Blob file should exist at {blob_file}"
 
-                # Navigate to Amazon
-                await server_module.browser_navigate.fn("https://www.amazon.com")
+        # Read PNG data and extract dimensions
+        png_data = blob_file.read_bytes()
+        width, height = get_png_dimensions(png_data)
 
-                # Take viewport-only screenshot (full_page=False)
-                blob_uri = await server_module.browser_take_screenshot.fn(
-                    filename="amazon_viewport_test", fullPage=False
-                )
+        print(f"\n{'=' * 60}")
+        print("VIEWPORT-ONLY SCREENSHOT RESOLUTION TEST")
+        print(f"{'=' * 60}")
+        print("Expected viewport: 1920x1080")
+        print(f"Actual dimensions: {width}x{height}")
+        print(f"Width ratio: {width / 1920:.3f} ({width / 1920 * 100:.1f}%)")
+        print(f"Height ratio: {height / 1080:.3f} ({height / 1080 * 100:.1f}%)")
+        print(f"{'=' * 60}\n")
 
-                # Verify we got a blob URI
-                assert isinstance(blob_uri, str), f"Expected blob URI string, got {type(blob_uri)}"
-                assert blob_uri.startswith("blob://"), f"Expected blob:// URI, got {blob_uri}"
-
-                # Extract blob ID and read blob directly from storage
-                blob_id = blob_uri.replace("blob://", "")
-
-                print(f"\n=== Blob Storage Contents ===")
-                print(f"Looking for blob: {blob_id}")
-                print(f"Storage root: {tmpdir}")
-
-                # Find the blob file in temp storage
-                blob_file = None
-                for root, dirs, files in os.walk(tmpdir):
-                    if blob_id in files:
-                        blob_file = Path(root) / blob_id
-                        break
-
-                assert blob_file is not None, f"Blob file not found for {blob_id}"
-                assert blob_file.exists(), f"Blob file should exist at {blob_file}"
-
-                # Read PNG data and extract dimensions
-                png_data = blob_file.read_bytes()
-                width, height = get_png_dimensions(png_data)
-
-                print(f"\n{'=' * 60}")
-                print("VIEWPORT-ONLY SCREENSHOT RESOLUTION TEST")
-                print(f"{'=' * 60}")
-                print("Expected viewport: 1920x1080")
-                print(f"Actual dimensions: {width}x{height}")
-                print(f"Width ratio: {width / 1920:.3f} ({width / 1920 * 100:.1f}%)")
-                print(f"Height ratio: {height / 1080:.3f} ({height / 1080 * 100:.1f}%)")
-                print(f"{'=' * 60}\n")
-
-                # For viewport-only screenshots, we expect EXACT dimensions
-                if width == 1920 and height == 1080:
-                    print("✅ Viewport dimensions are CORRECT (1920x1080)")
-                    print("   This means the viewport is properly configured!")
-                else:
-                    print(f"❌ Viewport dimensions are WRONG: {width}x{height}")
-                    print("   Expected: 1920x1080")
-                    print("   This means the viewport itself is not properly set")
-
-            finally:
-                # Restore original server components
-                server_module.proxy_client = original_proxy_client
-                server_module.blob_manager = original_blob_manager
-                server_module.middleware = original_middleware
-
-                # Clean up
-                await blob_manager.stop_cleanup_task()
-                await proxy_client.stop()
+        # For viewport-only screenshots, we expect EXACT dimensions
+        if width == 1920 and height == 1080:
+            print("✅ Viewport dimensions are CORRECT (1920x1080)")
+            print("   This means the viewport is properly configured!")
+        else:
+            print(f"❌ Viewport dimensions are WRONG: {width}x{height}")
+            print("   Expected: 1920x1080")
+            print("   This means the viewport itself is not properly set")

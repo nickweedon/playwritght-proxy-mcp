@@ -109,17 +109,18 @@ def load_playwright_config() -> PlaywrightConfig:
     """
     config: PlaywrightConfig = {
         "browser": os.getenv("PLAYWRIGHT_BROWSER", "chromium"),
-        "headless": _get_bool_env("PLAYWRIGHT_HEADLESS", True),
-        "no_sandbox": _get_bool_env("PLAYWRIGHT_NO_SANDBOX", True),
-        "isolated": _get_bool_env("PLAYWRIGHT_ISOLATED", True),
+        "headless": _get_bool_env("PLAYWRIGHT_HEADLESS", False),
+        "no_sandbox": _get_bool_env("PLAYWRIGHT_NO_SANDBOX", False),
+        "isolated": _get_bool_env("PLAYWRIGHT_ISOLATED", False),
         "caps": os.getenv("PLAYWRIGHT_CAPS", "vision,pdf"),
-        "save_session": _get_bool_env("PLAYWRIGHT_SAVE_SESSION", True),
+        "save_session": _get_bool_env("PLAYWRIGHT_SAVE_SESSION", False),
         "save_trace": _get_bool_env("PLAYWRIGHT_SAVE_TRACE", False),
         "output_dir": os.getenv("PLAYWRIGHT_OUTPUT_DIR", "/app/playwright-output"),
-        "timeout_action": _get_int_env("PLAYWRIGHT_TIMEOUT_ACTION", 5000),
-        "timeout_navigation": _get_int_env("PLAYWRIGHT_TIMEOUT_NAVIGATION", 60000),
+        "timeout_action": _get_int_env("PLAYWRIGHT_TIMEOUT_ACTION", 15000),
+        "timeout_navigation": _get_int_env("PLAYWRIGHT_TIMEOUT_NAVIGATION", 5000),
         "image_responses": os.getenv("PLAYWRIGHT_IMAGE_RESPONSES", "allow"),
         "ignore_https_errors": _get_bool_env("PLAYWRIGHT_IGNORE_HTTPS_ERRORS", False),
+        "shared_browser_context": _get_bool_env("PLAYWRIGHT_SHARED_BROWSER_CONTEXT", False),
     }
 
     # Optional settings - only include if set

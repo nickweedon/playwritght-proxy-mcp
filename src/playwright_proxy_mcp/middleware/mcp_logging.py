@@ -33,7 +33,12 @@ class MCPLoggingMiddleware(Middleware):
         grep "CLIENT_MCP.*tools/call.*browser_navigate" logs/playwright-proxy-mcp.log
     """
 
-    def __init__(self, log_request_params: bool = True, log_response_data: bool = False):
+    def __init__(
+        self,
+        log_request_params: bool = True,
+        log_response_data: bool = False,
+        max_log_length: int = 5000,
+    ):
         """
         Initialize the logging middleware.
 
@@ -41,9 +46,11 @@ class MCPLoggingMiddleware(Middleware):
             log_request_params: Log request parameters (default: True)
             log_response_data: Log full response data (default: False for brevity)
                              Response data can be very large for snapshots/screenshots
+            max_log_length: Maximum length for logged data before truncation (default: 5000)
         """
         self.log_request_params = log_request_params
         self.log_response_data = log_response_data
+        self.max_log_length = max_log_length
 
     async def on_call_tool(self, context: MiddlewareContext, call_next):
         """Log tool calls from MCP clients"""
@@ -107,7 +114,9 @@ class MCPLoggingMiddleware(Middleware):
 
         logger.info(f"CLIENT_MCP → Prompt request: {name}")
         if self.log_request_params and arguments:
-            logger.debug(f"CLIENT_MCP   Prompt arguments: {self._truncate_data(arguments)}")
+            logger.info(
+                f"CLIENT_MCP   Prompt arguments: {self._truncate_data(arguments, max_length=self.max_log_length)}"
+            )
 
         try:
             result = await call_next(context)
@@ -230,20 +239,20 @@ class MCPLoggingMiddleware(Middleware):
     def _log_arguments(self, tool_name: str, arguments: dict[str, Any]) -> None:
         """Log tool arguments with truncation for large values"""
         if not arguments:
-            logger.debug(f"CLIENT_MCP   Tool '{tool_name}' arguments: (none)")
+            logger.info(f"CLIENT_MCP   Tool '{tool_name}' arguments: (none)")
             return
 
         # Truncate large arguments to prevent log flooding
-        truncated_args = self._truncate_data(arguments)
-        logger.debug(f"CLIENT_MCP   Tool '{tool_name}' arguments: {truncated_args}")
+        truncated_args = self._truncate_data(arguments, max_length=self.max_log_length)
+        logger.info(f"CLIENT_MCP   Tool '{tool_name}' arguments: {truncated_args}")
 
     def _log_result(self, tool_name: str, result: Any) -> None:
         """Log tool result with truncation for large values"""
         # Truncate large results to prevent log flooding
-        truncated_result = self._truncate_data(result)
-        logger.debug(f"CLIENT_MCP   Tool '{tool_name}' result: {truncated_result}")
+        truncated_result = self._truncate_data(result, max_length=self.max_log_length)
+        logger.info(f"CLIENT_MCP   Tool '{tool_name}' result: {truncated_result}")
 
-    def _truncate_data(self, data: Any, max_length: int = 500) -> str:
+    def _truncate_data(self, data: Any, max_length: int) -> str:
         """
         Truncate data for logging.
 

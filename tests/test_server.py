@@ -33,7 +33,7 @@ async def test_call_playwright_tool_no_client():
 async def test_call_playwright_tool_unhealthy():
     """Test calling playwright tool when client is unhealthy."""
     mock_client = Mock()
-    mock_client.is_healthy.return_value = False
+    mock_client.is_healthy = AsyncMock(return_value=False)
 
     with patch("playwright_proxy_mcp.server.proxy_client", mock_client):
         with pytest.raises(RuntimeError, match="Playwright subprocess not running"):
@@ -44,7 +44,7 @@ async def test_call_playwright_tool_unhealthy():
 async def test_call_playwright_tool_no_process():
     """Test calling playwright tool when process is not initialized."""
     mock_client = Mock()
-    mock_client.is_healthy.return_value = True
+    mock_client.is_healthy = AsyncMock(return_value=True)
     mock_client.call_tool = AsyncMock(
         side_effect=RuntimeError("Playwright subprocess not properly initialized")
     )
@@ -58,7 +58,7 @@ async def test_call_playwright_tool_no_process():
 async def test_call_playwright_tool_success():
     """Test successful playwright tool call."""
     mock_client = Mock()
-    mock_client.is_healthy.return_value = True
+    mock_client.is_healthy = AsyncMock(return_value=True)
     mock_client.call_tool = AsyncMock(return_value={"status": "success", "data": "transformed"})
 
     with patch("playwright_proxy_mcp.server.proxy_client", mock_client):
@@ -77,7 +77,7 @@ async def test_call_playwright_tool_success():
 async def test_call_playwright_tool_strips_prefix():
     """Test that tool names are passed through directly without modification."""
     mock_client = Mock()
-    mock_client.is_healthy.return_value = True
+    mock_client.is_healthy = AsyncMock(return_value=True)
     mock_client.call_tool = AsyncMock(return_value={})
 
     with patch("playwright_proxy_mcp.server.proxy_client", mock_client):
@@ -93,7 +93,7 @@ async def test_call_playwright_tool_strips_prefix():
 async def test_call_playwright_tool_error_response():
     """Test handling of error response from playwright."""
     mock_client = Mock()
-    mock_client.is_healthy.return_value = True
+    mock_client.is_healthy = AsyncMock(return_value=True)
     mock_client.call_tool = AsyncMock(
         side_effect=RuntimeError("MCP error: {'code': -1, 'message': 'Navigation failed'}")
     )
@@ -107,7 +107,7 @@ async def test_call_playwright_tool_error_response():
 async def test_playwright_screenshot_returns_blob_uri():
     """Test that browser_take_screenshot returns blob:// URI directly."""
     mock_client = Mock()
-    mock_client.is_healthy.return_value = True
+    mock_client.is_healthy = AsyncMock(return_value=True)
 
     # Mock response with blob:// URI (after middleware transformation)
     mock_client.call_tool = AsyncMock(
