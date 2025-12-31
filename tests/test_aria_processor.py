@@ -8,6 +8,7 @@ import pytest
 from playwright_proxy_mcp.utils.aria_processor import (
     _extract_yaml_from_markdown,
     apply_jmespath_query,
+    flatten_aria_tree,
     format_output,
     parse_aria_snapshot,
 )
@@ -193,3 +194,212 @@ def test_format_output_default_yaml():
     import yaml
     assert yaml.safe_load(result_yaml) == data
     assert yaml.safe_load(result_other) == data
+
+
+# Tests for flatten_aria_tree()
+
+def test_flatten_aria_tree_simple():
+    """Test flattening a simple 2-level tree."""
+    tree = [
+        {
+            "role": "document",
+            "children": [
+                {"role": "button", "name": {"value": "Submit"}},
+                {"role": "link", "name": {"value": "Home"}},
+            ]
+        }
+    ]
+
+    result = flatten_aria_tree(tree)
+
+    assert len(result) == 3
+    # Check root element
+    assert result[0]["role"] == "document"
+    assert result[0]["_depth"] == 0
+    assert result[0]["_parent_role"] is None
+    assert result[0]["_index"] == 0
+    assert "children" not in result[0]
+    # Check children
+    assert result[1]["role"] == "button"
+    assert result[1]["_depth"] == 1
+    assert result[1]["_parent_role"] == "document"
+    assert result[1]["_index"] == 1
+    assert result[2]["role"] == "link"
+    assert result[2]["_depth"] == 1
+    assert result[2]["_parent_role"] == "document"
+    assert result[2]["_index"] == 2
+
+
+def test_flatten_aria_tree_deep_nesting():
+    """Test flattening a deeply nested tree (4 levels)."""
+    tree = [
+        {
+            "role": "document",
+            "children": [
+                {
+                    "role": "banner",
+                    "children": [
+                        {
+                            "role": "navigation",
+                            "children": [
+                                {"role": "link", "name": {"value": "Home"}}
+                            ]
+                        }
+                    ]
+                }
+            ]
+        }
+    ]
+
+    result = flatten_aria_tree(tree)
+
+    assert len(result) == 4
+    assert result[0]["role"] == "document"
+    assert result[0]["_depth"] == 0
+    assert result[1]["role"] == "banner"
+    assert result[1]["_depth"] == 1
+    assert result[1]["_parent_role"] == "document"
+    assert result[2]["role"] == "navigation"
+    assert result[2]["_depth"] == 2
+    assert result[2]["_parent_role"] == "banner"
+    assert result[3]["role"] == "link"
+    assert result[3]["_depth"] == 3
+    assert result[3]["_parent_role"] == "navigation"
+
+
+def test_flatten_aria_tree_multiple_siblings():
+    """Test flattening tree with multiple siblings at each level."""
+    tree = [
+        {
+            "role": "document",
+            "children": [
+                {
+                    "role": "banner",
+                    "children": [
+                        {"role": "heading", "name": {"value": "Welcome"}},
+                        {"role": "navigation"}
+                    ]
+                },
+                {
+                    "role": "main",
+                    "children": [
+                        {"role": "heading", "name": {"value": "Content"}},
+                        {"role": "paragraph"}
+                    ]
+                }
+            ]
+        }
+    ]
+
+    result = flatten_aria_tree(tree)
+
+    # Should have: document, banner, heading, navigation, main, heading, paragraph = 7 nodes
+    assert len(result) == 7
+    # Verify depth-first order
+    assert result[0]["role"] == "document"
+    assert result[1]["role"] == "banner"
+    assert result[2]["role"] == "heading"
+    assert result[3]["role"] == "navigation"
+    assert result[4]["role"] == "main"
+    assert result[5]["role"] == "heading"
+    assert result[6]["role"] == "paragraph"
+    # Verify indices are sequential
+    assert [node["_index"] for node in result] == list(range(7))
+
+
+def test_flatten_aria_tree_single_node():
+    """Test flattening a tree with a single node (no children)."""
+    tree = [{"role": "button", "name": {"value": "Click me"}}]
+
+    result = flatten_aria_tree(tree)
+
+    assert len(result) == 1
+    assert result[0]["role"] == "button"
+    assert result[0]["_depth"] == 0
+    assert result[0]["_parent_role"] is None
+    assert result[0]["_index"] == 0
+
+
+def test_flatten_aria_tree_empty_children():
+    """Test flattening a node with empty children array."""
+    tree = [{"role": "document", "children": []}]
+
+    result = flatten_aria_tree(tree)
+
+    assert len(result) == 1
+    assert result[0]["role"] == "document"
+    assert "children" not in result[0]
+
+
+def test_flatten_aria_tree_preserves_attributes():
+    """Test that flattening preserves all node attributes."""
+    tree = [
+        {
+            "role": "button",
+            "name": {"value": "Submit", "is_regex": False},
+            "disabled": False,
+            "ref": "e1",
+            "children": [
+                {"type": "text", "value": "Submit"}
+            ]
+        }
+    ]
+
+    result = flatten_aria_tree(tree)
+
+    assert len(result) == 2
+    # Check button attributes are preserved
+    assert result[0]["role"] == "button"
+    assert result[0]["name"] == {"value": "Submit", "is_regex": False}
+    assert result[0]["disabled"] is False
+    assert result[0]["ref"] == "e1"
+    # Check text child
+    assert result[1]["type"] == "text"
+    assert result[1]["value"] == "Submit"
+
+
+def test_flatten_aria_tree_multiple_root_elements():
+    """Test flattening when root array has multiple elements."""
+    tree = [
+        {"role": "button", "name": {"value": "Submit"}},
+        {"role": "link", "name": {"value": "Home"}},
+        {"role": "textbox", "ref": "e1"}
+    ]
+
+    result = flatten_aria_tree(tree)
+
+    assert len(result) == 3
+    assert all(node["_depth"] == 0 for node in result)
+    assert all(node["_parent_role"] is None for node in result)
+    assert [node["_index"] for node in result] == [0, 1, 2]
+
+
+def test_flatten_aria_tree_empty_list():
+    """Test flattening an empty list."""
+    tree = []
+
+    result = flatten_aria_tree(tree)
+
+    assert result == []
+
+
+def test_flatten_aria_tree_text_nodes():
+    """Test flattening tree containing text nodes."""
+    tree = [
+        {
+            "role": "paragraph",
+            "ref": "e1",
+            "children": [
+                {"type": "text", "value": "This is some text."}
+            ]
+        }
+    ]
+
+    result = flatten_aria_tree(tree)
+
+    assert len(result) == 2
+    assert result[0]["role"] == "paragraph"
+    assert result[1]["type"] == "text"
+    assert result[1]["value"] == "This is some text."
+    assert result[1]["_depth"] == 1
+    assert result[1]["_parent_role"] == "paragraph"

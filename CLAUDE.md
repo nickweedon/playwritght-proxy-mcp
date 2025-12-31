@@ -218,7 +218,7 @@ When adding new functionality:
 
 ### Enhanced Navigation Tools
 
-The `browser_navigate` and `browser_snapshot` tools have been enhanced to handle large ARIA snapshots efficiently with four major features:
+The `browser_navigate` and `browser_snapshot` tools have been enhanced to handle large ARIA snapshots efficiently with five major features:
 
 #### 1. Silent Mode
 Skip all snapshot processing when you only need navigation/capture without output:
@@ -236,7 +236,92 @@ await browser_snapshot(silent_mode=True)
 - Navigation without context overhead
 - Capturing state without immediate analysis
 
-#### 2. JMESPath Filtering
+#### 2. Flatten Mode
+
+Convert hierarchical ARIA trees to flat node lists for easier pagination and analysis:
+
+```python
+# Flatten large tree and paginate
+result = await browser_navigate(
+    url="https://example.com",
+    flatten=True,
+    limit=50,
+    output_format="json"
+)
+# Returns: First 50 nodes in depth-first order
+# cache_key="nav_abc123", total_items=500, has_more=True
+
+# Next page
+result2 = await browser_navigate(
+    url="https://example.com",
+    cache_key="nav_abc123",
+    offset=50,
+    limit=50
+)
+# Returns: Nodes 50-99 from cached flattened tree
+
+# Combine flatten with JMESPath to filter by depth
+result3 = await browser_snapshot(
+    flatten=True,
+    jmespath_query="[?_depth < 3]",  # Only first 3 levels
+    output_format="json"
+)
+```
+
+**How It Works:**
+- Hierarchical ARIA tree → Depth-first traversal → Flat list of nodes
+- Each node gets metadata: `_depth` (nesting level), `_parent_role` (parent's role), `_index` (position)
+- Children removed from nodes (no nesting in output)
+- Predictable pagination (each page has exactly `limit` nodes)
+
+**When to Use Flatten:**
+- ✅ **Paginating large raw snapshots** without JMESPath queries (e.g., 500+ node pages)
+- ✅ **Discovering all elements** in document order without deep query nesting
+- ✅ **Analyzing page structure** depth (e.g., find deeply nested elements)
+- ❌ **Don't use** when you need parent-child relationships preserved
+- ❌ **Don't use** when JMESPath query already produces flat list (redundant)
+
+**Flatten vs JMESPath for Pagination:**
+
+| Scenario | Use Flatten | Use JMESPath |
+|----------|-------------|--------------|
+| Large raw snapshot | ✅ `flatten=True, limit=50` | ❌ No query = 1 root element |
+| Extract specific elements | ❌ Loses structure | ✅ `jmespath_query='[?role == "button"]'` |
+| Both filter & paginate | ✅ `flatten=True, jmespath_query='[?_depth < 3]', limit=50` | ✅ Works together |
+
+**Example Output:**
+
+```json
+// Before flatten (tree structure - 1 root element)
+[
+  {
+    "role": "document",
+    "children": [
+      {"role": "banner", "children": [
+        {"role": "heading", "name": {"value": "Welcome"}}
+      ]},
+      {"role": "main", "children": [...]}
+    ]
+  }
+]
+
+// After flatten (14 standalone nodes)
+[
+  {"role": "document", "_depth": 0, "_parent_role": null, "_index": 0},
+  {"role": "banner", "_depth": 1, "_parent_role": "document", "_index": 1},
+  {"role": "heading", "name": {"value": "Welcome"}, "_depth": 2, "_parent_role": "banner", "_index": 2},
+  {"role": "main", "_depth": 1, "_parent_role": "document", "_index": 3},
+  // ... 10 more nodes
+]
+```
+
+**Performance Notes:**
+- Flattening happens once, result cached via `NavigationCache`
+- Each node adds `_depth`, `_parent_role`, `_index` metadata (~20 chars ≈ 5 tokens/node)
+- Use `output_format="json"` for most compact output
+- Combine with JMESPath to strip metadata: `[].{role: role, name: name.value}`
+
+#### 3. JMESPath Filtering
 
 Filter and transform ARIA snapshots using JMESPath queries with custom functions:
 
@@ -287,7 +372,7 @@ result = await browser_navigate(
 '[?role == `button` && !disabled].name.value'
 ```
 
-#### 3. Output Format Control
+#### 4. Output Format Control
 
 Choose between JSON and YAML output formats:
 
@@ -304,7 +389,7 @@ result = await browser_snapshot(
 )
 ```
 
-#### 4. Pagination with Caching
+#### 5. Pagination with Caching
 
 Handle large snapshots efficiently with client-controlled pagination:
 
@@ -337,8 +422,12 @@ result3 = await browser_navigate(
 **Cache Behavior:**
 - **TTL**: 5 minutes of inactivity
 - **Scope**: Shared between `browser_navigate` and `browser_snapshot`
-- **Query Order**: JMESPath filtering → Pagination → Formatting
+- **Processing Order**: Flatten (if enabled) → JMESPath filtering → Pagination → Formatting
 - **Expiration**: Automatic lazy cleanup on access
+
+**Pagination Requirements:**
+- Requires **one of**: `flatten=True`, `jmespath_query`, or `cache_key`
+- Without these, ARIA snapshots are single tree structures (not pageable)
 
 **Response Structure:**
 ```python
@@ -357,10 +446,21 @@ result3 = await browser_navigate(
 }
 ```
 
-#### Combined Features Example
+#### Combined Features Examples
 
 ```python
-# Navigate, filter buttons, paginate, return as JSON
+# Example 1: Flatten + JMESPath + Pagination
+# Navigate, flatten tree, filter by depth, paginate, return as JSON
+result = await browser_navigate(
+    url="https://example.com",
+    flatten=True,
+    jmespath_query='[?_depth < 3 && role == `button`]',  # Top 3 levels, buttons only
+    output_format="json",
+    limit=20
+)
+
+# Example 2: JMESPath + Pagination (without flatten)
+# Filter buttons, paginate, return as JSON
 result = await browser_navigate(
     url="https://example.com",
     jmespath_query='[?role == `button` && !disabled]',
@@ -368,7 +468,17 @@ result = await browser_navigate(
     limit=20
 )
 
-# Get next page of same filtered results
+# Example 3: Flatten + Pagination (no filtering)
+# Flatten entire tree, paginate
+result = await browser_navigate(
+    url="https://example.com",
+    flatten=True,
+    limit=50,
+    output_format="json"
+)
+
+# Example 4: Continue pagination with cache
+# Get next page of same filtered/flattened results
 next_page = await browser_navigate(
     url="https://example.com",
     cache_key=result["cache_key"],

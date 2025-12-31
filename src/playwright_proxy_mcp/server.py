@@ -185,6 +185,7 @@ async def _call_playwright_tool(tool_name: str, arguments: dict[str, Any]) -> An
 async def browser_navigate(
     url: str,
     silent_mode: bool = False,
+    flatten: bool = False,
     jmespath_query: str | None = None,
     output_format: str = "yaml",
     cache_key: str | None = None,
@@ -201,6 +202,27 @@ async def browser_navigate(
     Args:
         url: The URL to navigate to
         silent_mode: If True, suppress snapshot output (useful for navigation-only). Default: False
+        flatten: If True, flatten ARIA tree to depth-first node list before pagination. Default: False
+
+            When flatten=True, the hierarchical ARIA tree is converted to a flat list of nodes
+            where each node is standalone with metadata:
+            - _depth: Nesting level (0 = root)
+            - _parent_role: Role of parent node (None for root)
+            - _index: Position in flattened list
+
+            This enables pagination of large raw snapshots without JMESPath queries.
+
+            Example: A tree with 1 root element containing 500 nested nodes becomes a flat
+            list of 501 nodes that can be paginated (e.g., limit=50 returns first 50 nodes).
+
+            Use cases:
+            - Paginating large raw snapshots (when JMESPath query not needed)
+            - Discovering all elements in document order
+            - Analyzing page structure depth
+
+            Combines with jmespath_query: Flatten first, then filter (e.g., flatten=True,
+            jmespath_query="[?_depth < 3]" returns only top 3 levels).
+
         jmespath_query: JMESPath expression to filter/transform the ARIA snapshot. Default: None
 
             The ARIA snapshot is converted from YAML to JSON, then the query is applied.
@@ -254,17 +276,22 @@ async def browser_navigate(
 
         output_format: Format for snapshot output. Must be 'json' or 'yaml'. Default: 'yaml'
         cache_key: Reuse cached snapshot from previous navigation. Omit for fresh fetch. Default: None
-        offset: Starting index for pagination. REQUIRES jmespath_query or cache_key. Default: 0
-        limit: Maximum items to return in paginated results (1-10000). REQUIRES jmespath_query or cache_key. Default: 1000
+        offset: Starting index for pagination. REQUIRES flatten=True, jmespath_query, or cache_key. Default: 0
+        limit: Maximum items to return in paginated results (1-10000). REQUIRES flatten=True, jmespath_query, or cache_key. Default: 1000
 
-            CRITICAL: Pagination (offset/limit) only works with JMESPath queries because ARIA
-            snapshots are single hierarchical tree structures. Without a query, there is only
-            one root element to return (not a list). You must use jmespath_query to transform
-            the tree into a list before pagination can be applied.
+            CRITICAL: Pagination (offset/limit) requires either flatten=True OR jmespath_query because
+            raw ARIA snapshots are single hierarchical tree structures. Without flattening or a query,
+            there is only one root element to return (not a list).
 
-            Example workflow:
-            1. First call with query: browser_navigate(url="...", jmespath_query="[].children[?role=='button']", limit=50)
-            2. Next page with cache: browser_navigate(url="...", cache_key="nav_abc123", offset=50, limit=50)
+            Options for pagination:
+            1. Use flatten=True to convert tree to flat node list
+            2. Use jmespath_query to extract/filter specific elements
+            3. Use cache_key to continue paginating previous results
+
+            Example workflows:
+            1. Flatten + paginate: browser_navigate(url="...", flatten=True, limit=50)
+            2. Query + paginate: browser_navigate(url="...", jmespath_query="[].children[?role=='button']", limit=50)
+            3. Next page: browser_navigate(url="...", cache_key="nav_abc123", offset=50, limit=50)
 
     Returns:
         NavigationResponse with navigation result and paginated snapshot.
@@ -303,7 +330,7 @@ async def browser_navigate(
         - browser_take_screenshot: Visual screenshot instead of ARIA tree
     """
     from .types import NavigationResponse
-    from .utils.aria_processor import apply_jmespath_query, format_output, parse_aria_snapshot
+    from .utils.aria_processor import apply_jmespath_query, flatten_aria_tree, format_output, parse_aria_snapshot
 
     # Check if navigation_cache is initialized
     if navigation_cache is None:
@@ -363,13 +390,13 @@ async def browser_navigate(
             output_format=output_format,
         )
 
-    # Validate pagination requires JMESPath query
-    # ARIA snapshots without queries are single tree structures (not pageable)
-    if (offset > 0 or limit != 1000) and not jmespath_query and not cache_key:
+    # Validate pagination requires flatten, JMESPath query, or cache_key
+    # ARIA snapshots without flattening/queries are single tree structures (not pageable)
+    if (offset > 0 or limit != 1000) and not flatten and not jmespath_query and not cache_key:
         return NavigationResponse(
             success=False,
             url=url,
-            error="Pagination (offset/limit) requires jmespath_query. ARIA snapshots are single tree structures without queries.",
+            error="Pagination (offset/limit) requires flatten=True, jmespath_query, or cache_key. ARIA snapshots are single tree structures without flattening or queries.",
             cache_key="",
             total_items=0,
             offset=offset,
@@ -483,11 +510,16 @@ async def browser_navigate(
             output_format=output_format,
         )
 
-    # Apply JMESPath query if provided
-    result_data = snapshot_json
+    # Apply flattening if requested
+    # Flatten before JMESPath query so queries can filter on _depth, _parent_role, etc.
+    if flatten:
+        result_data = flatten_aria_tree(snapshot_json)
+    else:
+        result_data = snapshot_json
 
+    # Apply JMESPath query if provided
     if jmespath_query:
-        result_data, query_error = apply_jmespath_query(snapshot_json, jmespath_query)
+        result_data, query_error = apply_jmespath_query(result_data, jmespath_query)
         if query_error:
             return NavigationResponse(
                 success=False,
@@ -958,6 +990,7 @@ async def browser_evaluate(
 async def browser_snapshot(
     filename: str | None = None,
     silent_mode: bool = False,
+    flatten: bool = False,
     jmespath_query: str | None = None,
     output_format: str = "yaml",
     cache_key: str | None = None,
@@ -975,6 +1008,27 @@ async def browser_snapshot(
         filename: Save snapshot to markdown file instead of returning it in the response.
                   When provided, other filtering options are ignored.
         silent_mode: If True, suppress snapshot output (useful for snapshot-only). Default: False
+        flatten: If True, flatten ARIA tree to depth-first node list before pagination. Default: False
+
+            When flatten=True, the hierarchical ARIA tree is converted to a flat list of nodes
+            where each node is standalone with metadata:
+            - _depth: Nesting level (0 = root)
+            - _parent_role: Role of parent node (None for root)
+            - _index: Position in flattened list
+
+            This enables pagination of large raw snapshots without JMESPath queries.
+
+            Example: A tree with 1 root element containing 500 nested nodes becomes a flat
+            list of 501 nodes that can be paginated (e.g., limit=50 returns first 50 nodes).
+
+            Use cases:
+            - Paginating large raw snapshots (when JMESPath query not needed)
+            - Discovering all elements in document order
+            - Analyzing page structure depth
+
+            Combines with jmespath_query: Flatten first, then filter (e.g., flatten=True,
+            jmespath_query="[?_depth < 3]" returns only top 3 levels).
+
         jmespath_query: JMESPath expression to filter/transform the ARIA snapshot. Default: None
 
             The ARIA snapshot is converted from YAML to JSON, then the query is applied.
@@ -1028,17 +1082,22 @@ async def browser_snapshot(
 
         output_format: Format for snapshot output. Must be 'json' or 'yaml'. Default: 'yaml'
         cache_key: Reuse cached snapshot from previous call. Omit for fresh fetch. Default: None
-        offset: Starting index for pagination. REQUIRES jmespath_query or cache_key. Default: 0
-        limit: Maximum items to return in paginated results (1-10000). REQUIRES jmespath_query or cache_key. Default: 1000
+        offset: Starting index for pagination. REQUIRES flatten=True, jmespath_query, or cache_key. Default: 0
+        limit: Maximum items to return in paginated results (1-10000). REQUIRES flatten=True, jmespath_query, or cache_key. Default: 1000
 
-            CRITICAL: Pagination (offset/limit) only works with JMESPath queries because ARIA
-            snapshots are single hierarchical tree structures. Without a query, there is only
-            one root element to return (not a list). You must use jmespath_query to transform
-            the tree into a list before pagination can be applied.
+            CRITICAL: Pagination (offset/limit) requires either flatten=True OR jmespath_query because
+            raw ARIA snapshots are single hierarchical tree structures. Without flattening or a query,
+            there is only one root element to return (not a list).
 
-            Example workflow:
-            1. First call with query: browser_snapshot(jmespath_query="[].children[?role=='button']", limit=50)
-            2. Next page with cache: browser_snapshot(cache_key="nav_abc123", offset=50, limit=50)
+            Options for pagination:
+            1. Use flatten=True to convert tree to flat node list
+            2. Use jmespath_query to extract/filter specific elements
+            3. Use cache_key to continue paginating previous results
+
+            Example workflows:
+            1. Flatten + paginate: browser_snapshot(flatten=True, limit=50)
+            2. Query + paginate: browser_snapshot(jmespath_query="[].children[?role=='button']", limit=50)
+            3. Next page: browser_snapshot(cache_key="nav_abc123", offset=50, limit=50)
 
     Returns:
         NavigationResponse with snapshot result and paginated data (or file save confirmation).
@@ -1071,7 +1130,7 @@ async def browser_snapshot(
         return await _call_playwright_tool("browser_snapshot", args)
 
     from .types import NavigationResponse
-    from .utils.aria_processor import apply_jmespath_query, format_output, parse_aria_snapshot
+    from .utils.aria_processor import apply_jmespath_query, flatten_aria_tree, format_output, parse_aria_snapshot
 
     # Check if navigation_cache is initialized
     if navigation_cache is None:
@@ -1131,13 +1190,13 @@ async def browser_snapshot(
             output_format=output_format,
         )
 
-    # Validate pagination requires JMESPath query
-    # ARIA snapshots without queries are single tree structures (not pageable)
-    if (offset > 0 or limit != 1000) and not jmespath_query and not cache_key:
+    # Validate pagination requires flatten, JMESPath query, or cache_key
+    # ARIA snapshots without flattening/queries are single tree structures (not pageable)
+    if (offset > 0 or limit != 1000) and not flatten and not jmespath_query and not cache_key:
         return NavigationResponse(
             success=False,
             url="",
-            error="Pagination (offset/limit) requires jmespath_query. ARIA snapshots are single tree structures without queries.",
+            error="Pagination (offset/limit) requires flatten=True, jmespath_query, or cache_key. ARIA snapshots are single tree structures without flattening or queries.",
             cache_key="",
             total_items=0,
             offset=offset,
@@ -1251,11 +1310,16 @@ async def browser_snapshot(
             output_format=output_format,
         )
 
-    # Apply JMESPath query if provided
-    result_data = snapshot_json
+    # Apply flattening if requested
+    # Flatten before JMESPath query so queries can filter on _depth, _parent_role, etc.
+    if flatten:
+        result_data = flatten_aria_tree(snapshot_json)
+    else:
+        result_data = snapshot_json
 
+    # Apply JMESPath query if provided
     if jmespath_query:
-        result_data, query_error = apply_jmespath_query(snapshot_json, jmespath_query)
+        result_data, query_error = apply_jmespath_query(result_data, jmespath_query)
         if query_error:
             return NavigationResponse(
                 success=False,

@@ -145,6 +145,72 @@ def apply_jmespath_query(data: Any, expression: str) -> tuple[Any, str | None]:
         return ([], f"Invalid JMESPath query: {e}")
 
 
+def flatten_aria_tree(
+    node: dict | list,
+    depth: int = 0,
+    parent_role: str | None = None,
+    index_counter: list[int] | None = None
+) -> list[dict]:
+    """
+    Flatten ARIA tree to depth-first list of nodes.
+
+    Converts hierarchical ARIA snapshot into a flat list where each node
+    is a standalone dict with metadata about its position in the tree.
+
+    Args:
+        node: ARIA tree (dict) or root array (list)
+        depth: Current nesting level (0 = root)
+        parent_role: Role of parent node (for context)
+        index_counter: Mutable list containing current index (internal use)
+
+    Returns:
+        Flat list of nodes with added metadata fields:
+        - _depth: Nesting level (0 = root)
+        - _parent_role: Role of parent node (None for root)
+        - _index: Position in flattened list
+
+    Example:
+        >>> tree = [{"role": "document", "children": [{"role": "button"}]}]
+        >>> flatten_aria_tree(tree)
+        [
+            {"role": "document", "_depth": 0, "_parent_role": None, "_index": 0},
+            {"role": "button", "_depth": 1, "_parent_role": "document", "_index": 1}
+        ]
+    """
+    if index_counter is None:
+        index_counter = [0]
+
+    result = []
+
+    if isinstance(node, list):
+        # Process array of nodes
+        for item in node:
+            result.extend(flatten_aria_tree(item, depth, parent_role, index_counter))
+
+    elif isinstance(node, dict):
+        # Create copy of current node without children
+        node_copy = {**node}
+
+        # Extract children before adding metadata
+        children = node_copy.pop('children', None)
+
+        # Add metadata
+        node_copy['_depth'] = depth
+        node_copy['_parent_role'] = parent_role
+        node_copy['_index'] = index_counter[0]
+        index_counter[0] += 1
+
+        # Add current node to result
+        result.append(node_copy)
+
+        # Recursively flatten children
+        if children:
+            current_role = node.get('role')
+            result.extend(flatten_aria_tree(children, depth + 1, current_role, index_counter))
+
+    return result
+
+
 def format_output(data: dict[str, Any], output_format: str) -> str | list[dict[str, Any]]:
     """
     Format data as JSON (raw) or YAML.

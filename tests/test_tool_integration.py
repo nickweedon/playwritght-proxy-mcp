@@ -143,13 +143,13 @@ async def test_browser_navigate_pagination(mock_proxy_client, mock_navigation_ca
     with patch.object(server, "proxy_client", mock_proxy_client), \
          patch.object(server, "navigation_cache", mock_navigation_cache):
 
-        # Test 1: Pagination without query should fail
+        # Test 1: Pagination without query or flatten should fail
         result = await server.browser_navigate.fn(
             url="https://example.com",
             limit=20
         )
         assert result["success"] is False
-        assert "Pagination (offset/limit) requires jmespath_query" in result["error"]
+        assert "Pagination (offset/limit) requires flatten=True, jmespath_query, or cache_key" in result["error"]
 
         # Test 2: Pagination with query should work
         result = await server.browser_navigate.fn(
