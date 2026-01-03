@@ -158,120 +158,180 @@ class PlaywrightProxyClient:
         Raises:
             RuntimeError: If required executables are not found
         """
-        # Check if we should use Windows Node.js
-        use_windows_node = should_use_windows_node()
-
-        if use_windows_node:
-            # WSL->Windows mode: use cmd.exe to execute Windows npx.cmd
-            logger.info("WSL->Windows mode enabled (PW_MCP_PROXY_WSL_WINDOWS set)")
-            logger.info("Using Windows npx.cmd via cmd.exe")
-
-            cmd_exe = shutil.which("cmd.exe")
-            if not cmd_exe:
-                logger.error("cmd.exe not found in PATH")
-                raise RuntimeError(
-                    "cmd.exe not found in PATH. When PW_MCP_PROXY_WSL_WINDOWS is set, "
-                    "cmd.exe must be available to execute Windows npx.cmd."
-                )
-
-            command = [cmd_exe, "/c", "npx.cmd"]
-            logger.info(f"Using command: {command}")
-        else:
-            # Standard mode: use npx from PATH
-            logger.info("Standard mode (PW_MCP_PROXY_WSL_WINDOWS not set)")
-            logger.info("Using npx from PATH")
-
-            npx_path = shutil.which("npx")
-            if not npx_path:
-                logger.error("npx not found in PATH")
-                raise RuntimeError(
-                    "npx not found in PATH. Please ensure Node.js is installed."
-                )
-
-            command = [npx_path]
-            logger.info(f"Found npx at: {npx_path}")
+        # Build base command (npx or cmd.exe)
+        command = self._build_base_command()
 
         # Add playwright package
         command.append("@playwright/mcp@latest")
 
-        # NO --host, --port, or --allowed-hosts args (these are HTTP-only)
-        # Stdio mode uses stdin/stdout for communication
+        # Add configuration arguments
+        self._add_config_arguments(command, config)
 
-        # Browser
+        return command
+
+    def _build_base_command(self) -> list[str]:
+        """
+        Build the base command (npx or cmd.exe with npx.cmd).
+
+        Returns:
+            Base command as list of strings
+
+        Raises:
+            RuntimeError: If required executable is not found
+        """
+        use_windows_node = should_use_windows_node()
+
+        if use_windows_node:
+            return self._build_wsl_windows_command()
+        else:
+            return self._build_standard_command()
+
+    def _build_standard_command(self) -> list[str]:
+        """
+        Build standard npx command.
+
+        Returns:
+            Command starting with npx path
+
+        Raises:
+            RuntimeError: If npx is not found in PATH
+        """
+        logger.info("Standard mode (PW_MCP_PROXY_WSL_WINDOWS not set)")
+        logger.info("Using npx from PATH")
+
+        npx_path = shutil.which("npx")
+        if not npx_path:
+            logger.error("npx not found in PATH")
+            raise RuntimeError(
+                "npx not found in PATH. Please ensure Node.js is installed."
+            )
+
+        logger.info(f"Found npx at: {npx_path}")
+        return [npx_path]
+
+    def _build_wsl_windows_command(self) -> list[str]:
+        """
+        Build WSL->Windows command using cmd.exe.
+
+        Returns:
+            Command starting with cmd.exe /c npx.cmd
+
+        Raises:
+            RuntimeError: If cmd.exe is not found in PATH
+        """
+        logger.info("WSL->Windows mode enabled (PW_MCP_PROXY_WSL_WINDOWS set)")
+        logger.info("Using Windows npx.cmd via cmd.exe")
+
+        cmd_exe = shutil.which("cmd.exe")
+        if not cmd_exe:
+            logger.error("cmd.exe not found in PATH")
+            raise RuntimeError(
+                "cmd.exe not found in PATH. When PW_MCP_PROXY_WSL_WINDOWS is set, "
+                "cmd.exe must be available to execute Windows npx.cmd."
+            )
+
+        command = [cmd_exe, "/c", "npx.cmd"]
+        logger.info(f"Using command: {command}")
+        return command
+
+    def _add_config_arguments(self, command: list[str], config: PlaywrightConfig) -> None:
+        """
+        Add configuration arguments to command.
+
+        Args:
+            command: Command list to append to (modified in place)
+            config: Playwright configuration
+        """
+        # Browser configuration
+        self._add_browser_args(command, config)
+
+        # Session and storage
+        self._add_session_args(command, config)
+
+        # Network and proxy
+        self._add_network_args(command, config)
+
+        # Recording and output
+        self._add_recording_args(command, config)
+
+        # Timeouts and responses
+        self._add_timeout_args(command, config)
+
+        # Stealth and security
+        self._add_stealth_args(command, config)
+
+        # Extensions
+        self._add_extension_args(command, config)
+
+    def _add_browser_args(self, command: list[str], config: PlaywrightConfig) -> None:
+        """Add browser-related arguments."""
         if "browser" in config:
             command.extend(["--browser", config["browser"]])
 
-        # Headless
         if "headless" in config and config["headless"]:
             command.append("--headless")
 
-        # No sandbox (required for running as root in Docker)
         if "no_sandbox" in config and config["no_sandbox"]:
             command.append("--no-sandbox")
 
-        # Device emulation
         if "device" in config and config["device"]:
             command.extend(["--device", config["device"]])
 
-        # Viewport size
         if "viewport_size" in config and config["viewport_size"]:
             command.extend(["--viewport-size", config["viewport_size"]])
 
-        # Isolated mode
         if "isolated" in config and config["isolated"]:
             command.append("--isolated")
 
-        # User data directory
+    def _add_session_args(self, command: list[str], config: PlaywrightConfig) -> None:
+        """Add session and storage arguments."""
         if "user_data_dir" in config and config["user_data_dir"]:
             command.extend(["--user-data-dir", config["user_data_dir"]])
 
-        # Storage state
         if "storage_state" in config and config["storage_state"]:
             command.extend(["--storage-state", config["storage_state"]])
 
-        # Network filtering
+        if "save_session" in config and config["save_session"]:
+            command.append("--save-session")
+
+    def _add_network_args(self, command: list[str], config: PlaywrightConfig) -> None:
+        """Add network filtering and proxy arguments."""
         if "allowed_origins" in config and config["allowed_origins"]:
             command.extend(["--allowed-origins", config["allowed_origins"]])
 
         if "blocked_origins" in config and config["blocked_origins"]:
             command.extend(["--blocked-origins", config["blocked_origins"]])
 
-        # Proxy server
         if "proxy_server" in config and config["proxy_server"]:
             command.extend(["--proxy-server", config["proxy_server"]])
 
-        # Capabilities
         if "caps" in config and config["caps"]:
             command.extend(["--caps", config["caps"]])
 
-        # Save session
-        if "save_session" in config and config["save_session"]:
-            command.append("--save-session")
-
-        # Save trace
+    def _add_recording_args(self, command: list[str], config: PlaywrightConfig) -> None:
+        """Add recording and output arguments."""
         if "save_trace" in config and config["save_trace"]:
             command.append("--save-trace")
 
-        # Save video
         if "save_video" in config and config["save_video"]:
             command.extend(["--save-video", config["save_video"]])
 
-        # Output directory
         if "output_dir" in config:
             command.extend(["--output-dir", config["output_dir"]])
 
-        # Timeouts
+    def _add_timeout_args(self, command: list[str], config: PlaywrightConfig) -> None:
+        """Add timeout and response configuration arguments."""
         if "timeout_action" in config:
             command.extend(["--timeout-action", str(config["timeout_action"])])
 
         if "timeout_navigation" in config:
             command.extend(["--timeout-navigation", str(config["timeout_navigation"])])
 
-        # Image responses
         if "image_responses" in config:
             command.extend(["--image-responses", config["image_responses"]])
 
-        # Stealth settings
+    def _add_stealth_args(self, command: list[str], config: PlaywrightConfig) -> None:
+        """Add stealth and security arguments."""
         if "user_agent" in config and config["user_agent"]:
             command.extend(["--user-agent", config["user_agent"]])
 
@@ -281,14 +341,13 @@ class PlaywrightProxyClient:
         if "ignore_https_errors" in config and config["ignore_https_errors"]:
             command.append("--ignore-https-errors")
 
-        # Extension support
+    def _add_extension_args(self, command: list[str], config: PlaywrightConfig) -> None:
+        """Add extension support arguments."""
         if "extension" in config and config["extension"]:
             command.append("--extension")
 
         if "shared_browser_context" in config and config["shared_browser_context"]:
             command.append("--shared-browser-context")
-
-        return command
 
     def _build_env(self, config: PlaywrightConfig) -> dict[str, str]:
         """

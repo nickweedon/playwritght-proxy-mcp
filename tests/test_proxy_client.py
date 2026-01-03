@@ -256,3 +256,163 @@ class TestPlaywrightProxyClient:
         assert '/c' in command
         assert 'npx.cmd' in command
         assert '@playwright/mcp@latest' in command
+
+    def test_build_command_minimal_config(self, proxy_client):
+        """Test command building with minimal configuration."""
+        config = {}
+
+        with patch('playwright_proxy_mcp.playwright.proxy_client.should_use_windows_node', return_value=False):
+            with patch('playwright_proxy_mcp.playwright.proxy_client.shutil.which', return_value='/usr/bin/npx'):
+                command = proxy_client._build_command(config)
+
+        # Should only have npx and package
+        assert command == ['/usr/bin/npx', '@playwright/mcp@latest']
+
+    def test_build_command_all_boolean_flags(self, proxy_client):
+        """Test command building with all boolean flags enabled."""
+        config = {
+            "headless": True,
+            "no_sandbox": True,
+            "isolated": True,
+            "save_session": True,
+            "save_trace": True,
+            "ignore_https_errors": True,
+            "extension": True,
+            "shared_browser_context": True,
+        }
+
+        with patch('playwright_proxy_mcp.playwright.proxy_client.should_use_windows_node', return_value=False):
+            with patch('playwright_proxy_mcp.playwright.proxy_client.shutil.which', return_value='/usr/bin/npx'):
+                command = proxy_client._build_command(config)
+
+        assert '--headless' in command
+        assert '--no-sandbox' in command
+        assert '--isolated' in command
+        assert '--save-session' in command
+        assert '--save-trace' in command
+        assert '--ignore-https-errors' in command
+        assert '--extension' in command
+        assert '--shared-browser-context' in command
+
+    def test_build_command_all_string_options(self, proxy_client):
+        """Test command building with all string-based options."""
+        config = {
+            "browser": "chromium",
+            "device": "iPhone 12",
+            "viewport_size": "1920x1080",
+            "user_data_dir": "/tmp/user-data",
+            "storage_state": "/tmp/storage.json",
+            "allowed_origins": "https://example.com",
+            "blocked_origins": "https://ads.com",
+            "proxy_server": "http://proxy:8080",
+            "caps": "video",
+            "save_video": "on-failure",
+            "output_dir": "/tmp/output",
+            "timeout_action": 30000,
+            "timeout_navigation": 60000,
+            "image_responses": "base64",
+            "user_agent": "CustomAgent/1.0",
+            "init_script": "/tmp/init.js",
+        }
+
+        with patch('playwright_proxy_mcp.playwright.proxy_client.should_use_windows_node', return_value=False):
+            with patch('playwright_proxy_mcp.playwright.proxy_client.shutil.which', return_value='/usr/bin/npx'):
+                command = proxy_client._build_command(config)
+
+        # Check all key-value pairs
+        assert '--browser' in command and 'chromium' in command
+        assert '--device' in command and 'iPhone 12' in command
+        assert '--viewport-size' in command and '1920x1080' in command
+        assert '--user-data-dir' in command and '/tmp/user-data' in command
+        assert '--storage-state' in command and '/tmp/storage.json' in command
+        assert '--allowed-origins' in command and 'https://example.com' in command
+        assert '--blocked-origins' in command and 'https://ads.com' in command
+        assert '--proxy-server' in command and 'http://proxy:8080' in command
+        assert '--caps' in command and 'video' in command
+        assert '--save-video' in command and 'on-failure' in command
+        assert '--output-dir' in command and '/tmp/output' in command
+        assert '--timeout-action' in command and '30000' in command
+        assert '--timeout-navigation' in command and '60000' in command
+        assert '--image-responses' in command and 'base64' in command
+        assert '--user-agent' in command and 'CustomAgent/1.0' in command
+        assert '--init-script' in command and '/tmp/init.js' in command
+
+    def test_build_command_false_boolean_values(self, proxy_client):
+        """Test that false boolean values don't add flags."""
+        config = {
+            "headless": False,
+            "no_sandbox": False,
+            "isolated": False,
+        }
+
+        with patch('playwright_proxy_mcp.playwright.proxy_client.should_use_windows_node', return_value=False):
+            with patch('playwright_proxy_mcp.playwright.proxy_client.shutil.which', return_value='/usr/bin/npx'):
+                command = proxy_client._build_command(config)
+
+        # False values should not add flags
+        assert '--headless' not in command
+        assert '--no-sandbox' not in command
+        assert '--isolated' not in command
+
+    def test_build_command_empty_string_values(self, proxy_client):
+        """Test that empty string values don't add options."""
+        config = {
+            "device": "",
+            "viewport_size": "",
+            "user_agent": "",
+        }
+
+        with patch('playwright_proxy_mcp.playwright.proxy_client.should_use_windows_node', return_value=False):
+            with patch('playwright_proxy_mcp.playwright.proxy_client.shutil.which', return_value='/usr/bin/npx'):
+                command = proxy_client._build_command(config)
+
+        # Empty strings should not add options
+        assert '--device' not in command
+        assert '--viewport-size' not in command
+        assert '--user-agent' not in command
+
+    def test_build_command_npx_not_found_standard_mode(self, proxy_client):
+        """Test error when npx is not found in standard mode."""
+        config = {}
+
+        with patch('playwright_proxy_mcp.playwright.proxy_client.should_use_windows_node', return_value=False):
+            with patch('playwright_proxy_mcp.playwright.proxy_client.shutil.which', return_value=None):
+                with pytest.raises(RuntimeError, match="npx not found in PATH"):
+                    proxy_client._build_command(config)
+
+    def test_build_command_cmd_not_found_wsl_mode(self, proxy_client):
+        """Test error when cmd.exe is not found in WSL mode."""
+        config = {}
+
+        with patch('playwright_proxy_mcp.playwright.proxy_client.should_use_windows_node', return_value=True):
+            with patch('playwright_proxy_mcp.playwright.proxy_client.shutil.which', return_value=None):
+                with pytest.raises(RuntimeError, match="cmd.exe not found in PATH"):
+                    proxy_client._build_command(config)
+
+    def test_build_env_minimal(self, proxy_client):
+        """Test environment building with minimal config."""
+        config = {}
+
+        with patch('playwright_proxy_mcp.playwright.proxy_client.os.environ', {"PATH": "/usr/bin"}):
+            env = proxy_client._build_env(config)
+
+        assert "PATH" in env
+        assert "PLAYWRIGHT_MCP_EXTENSION_TOKEN" not in env
+
+    def test_build_env_with_extension_token(self, proxy_client):
+        """Test environment building with extension token."""
+        config = {"extension_token": "test-token-123"}
+
+        with patch('playwright_proxy_mcp.playwright.proxy_client.os.environ', {"PATH": "/usr/bin"}):
+            env = proxy_client._build_env(config)
+
+        assert env["PLAYWRIGHT_MCP_EXTENSION_TOKEN"] == "test-token-123"
+
+    def test_build_env_empty_extension_token(self, proxy_client):
+        """Test that empty extension token is not added to env."""
+        config = {"extension_token": ""}
+
+        with patch('playwright_proxy_mcp.playwright.proxy_client.os.environ', {"PATH": "/usr/bin"}):
+            env = proxy_client._build_env(config)
+
+        assert "PLAYWRIGHT_MCP_EXTENSION_TOKEN" not in env
